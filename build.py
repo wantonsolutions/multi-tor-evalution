@@ -189,8 +189,6 @@ def check_essential():
     required('glog/logging.h', 'libgoogle-glog-dev', 'g++')
     required('gflags/gflags.h', 'libgflags-dev', 'g++')
     required('gtest/gtest.h', 'libgtest-dev', 'g++')
-    required('benchmark/benchmark.h', 'https://github.com/google/benchmark',
-             'g++')
 
 
 def set_config(filename, config, new_value):
