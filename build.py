@@ -248,10 +248,10 @@ def check_mlx():
         set_config(DPDK_CONFIG, 'CONFIG_RTE_LIBRTE_MLX5_PMD', 'n')
 
 
-def generate_dpdk_extra_mk():
-    print()
-    with open('core/extra.dpdk.mk', 'w') as fp:
-        fp.write('LIBS += %s\n' % ' '.join(['-l' + lib for lib in extra_libs]))
+# def generate_dpdk_extra_mk():
+#     print()
+#     with open('core/extra.dpdk.mk', 'w') as fp:
+#         fp.write('LIBS += %s\n' % ' '.join(['-l' + lib for lib in extra_libs]))
 
 
 def find_current_plugins():

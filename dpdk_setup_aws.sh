@@ -138,6 +138,43 @@ bind_devices_to_igb_uio()
 	fi
 }
 
+
+#
+# Sets up environmental variables for ICC.
+#
+setup_icc()
+{
+	DEFAULT_PATH=/opt/intel/bin/iccvars.sh
+	param=$1
+	shpath=`which iccvars.sh 2> /dev/null`
+	if [ $? -eq 0 ] ; then
+		echo "Loading iccvars.sh from $shpath for $param"
+		source $shpath $param
+	elif [ -f $DEFAULT_PATH ] ; then
+		echo "Loading iccvars.sh from $DEFAULT_PATH for $param"
+		source $DEFAULT_PATH $param
+	else
+		echo "## ERROR: cannot find 'iccvars.sh' script to set up ICC."
+		echo "##     To fix, please add the directory that contains"
+		echo "##     iccvars.sh  to your 'PATH' environment variable."
+		quit
+	fi
+}
+
+#
+# Sets RTE_TARGET and does a "make install".
+#
+setup_target()
+{
+	export RTE_TARGET=x86_64-native-linuxapp-gcc
+	make install T=${RTE_TARGET}
+
+	echo "------------------------------------------------------------------------------"
+	echo " RTE_TARGET exported as $RTE_TARGET"
+	echo "------------------------------------------------------------------------------"
+}
+
+setup_target
 load_igb_uio_module
 set_non_numa_pages
 bind_devices_to_igb_uio

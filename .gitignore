@@ -1,1 +1,6 @@
 dpdk_deps/
+onearm_lb/helloworld/
+onearm_lb/l2fwd/
+onearm_lb/l3fwd/
+onearm_lb/skeleton/build/
+onearm_lb/skeleton/meson.build
