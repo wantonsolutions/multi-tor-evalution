@@ -14,6 +14,8 @@
 #include <rte_udp.h>
 #include "alt_header.h"
 
+#define PACKET_DEBUG_PRINTOUT 1
+
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
 
@@ -143,7 +145,8 @@ lcore_main(void)
 		 * port. The mapping is 0 -> 1, 1 -> 0, 2 -> 3, 3 -> 2, etc.
 		 */
 		RTE_ETH_FOREACH_DEV(port) {
-													
+			uint16_t ipv4_udp_rx = 0;	
+
 			/* Get burst of RX packets, from first and only port */
 			struct rte_mbuf *rx_pkts[BURST_SIZE];
 			const uint16_t nb_rx = rte_eth_rx_burst(port, 0,
@@ -152,136 +155,69 @@ lcore_main(void)
 			if (unlikely(nb_rx == 0))
 				continue;
 
-			/* Ethernet header
-			struct rte_ether_addr {
-   				uint8_t addr_bytes[RTE_ETHER_ADDR_LEN]; 
-   			} __attribute__((aligned(2)));
-
-			struct rte_ether_hdr {
-  				struct rte_ether_addr d_addr; 
-				struct rte_ether_addr s_addr; 
-				uint16_t ether_type;      
-			} __attribute__((aligned(2)));
-			*/
-			
-			/* IPv4 header
-			struct rte_ipv4_hdr {
-				uint8_t  version_ihl;       
-				uint8_t  type_of_service;   
-				rte_be16_t total_length;    
-				rte_be16_t packet_id;       
-				rte_be16_t fragment_offset; 
-				uint8_t  time_to_live;      
-				uint8_t  next_proto_id;     
-				rte_be16_t hdr_checksum;    
-				rte_be32_t src_addr;        
-				rte_be32_t dst_addr;        
-			} __attribute__((__packed__));
-			*/	
-
 			for (uint16_t i = 0; i < nb_rx; i++){
-				struct rte_ether_hdr* eth_hdr;
 				uint32_t packet_type = RTE_PTYPE_UNKNOWN;
-				uint16_t ether_type;
-				void *l3;	
-				int hdr_len;
-				struct rte_ipv4_hdr *ipv4_hdr;
-				uint16_t dst_port = 0;
-				uint16_t src_port = 0; 
-				uint32_t dst_ipaddr;
-				uint32_t src_ipaddr;
-				struct rte_ether_addr src_macaddr;
-				struct rte_ether_addr dst_macaddr;	
+				// L2 headers
+				struct rte_ether_hdr* eth_hdr;
+				struct rte_ether_addr temp_eth_addr;
+				// L3 headers: IPv4
+				struct rte_ipv4_hdr *ipv4_hdr; 
+				uint32_t temp_ipv4_addr;
+				// L4 headers: UDP 
+				struct rte_udp_hdr* udp;
+				uint16_t temp_udp_port;
+				// our own header: alt
+				struct alt_header* alt;
 
 				eth_hdr = rte_pktmbuf_mtod(rx_pkts[i], struct rte_ether_hdr *);
-				ether_type = eth_hdr->ether_type;
-				l3 = (uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr);
 
-				if(ether_type == rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4)){
-					ipv4_hdr = (struct rte_ipv4_hdr *)l3;
-					src_macaddr = eth_hdr->s_addr;
-					dst_macaddr = eth_hdr->d_addr;					
+				if(eth_hdr->ether_type == rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4)){									
+					temp_eth_addr   = eth_hdr->s_addr;
+					eth_hdr->s_addr = eth_hdr->d_addr;
+					eth_hdr->d_addr = temp_eth_addr;
 
-					printf("src_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-						src_macaddr.addr_bytes[0], src_macaddr.addr_bytes[1],
-						src_macaddr.addr_bytes[2], src_macaddr.addr_bytes[3],
-						src_macaddr.addr_bytes[4], src_macaddr.addr_bytes[5]);
-
-					printf("dst_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-						dst_macaddr.addr_bytes[0], dst_macaddr.addr_bytes[1],
-						dst_macaddr.addr_bytes[2], dst_macaddr.addr_bytes[3],
-						dst_macaddr.addr_bytes[4], dst_macaddr.addr_bytes[5]);
-
-					hdr_len = (ipv4_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) * RTE_IPV4_IHL_MULTIPLIER;
+					ipv4_hdr = (struct rte_ipv4_hdr *)((uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr));
+					int hdr_len = (ipv4_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) * RTE_IPV4_IHL_MULTIPLIER;
 
 					if (hdr_len == sizeof(struct rte_ipv4_hdr)) {
 						packet_type |= RTE_PTYPE_L3_IPV4;
 
-						src_ipaddr = rte_be_to_cpu_32(ipv4_hdr->src_addr);
-						dst_ipaddr = rte_be_to_cpu_32(ipv4_hdr->dst_addr);
-
-						uint8_t src_addr[4];
-						src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
-						src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
-						src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
-						src_addr[3] = (uint8_t) src_ipaddr & 0xff;
-						printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
-								src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
-
-						uint8_t dst_addr[4];
-						dst_addr[0] = (uint8_t) (dst_ipaddr >> 24) & 0xff;
-						dst_addr[1] = (uint8_t) (dst_ipaddr >> 16) & 0xff;
-						dst_addr[2] = (uint8_t) (dst_ipaddr >> 8) & 0xff;
-						dst_addr[3] = (uint8_t) dst_ipaddr & 0xff;
-						printf("dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
-							dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);		
-
-						// if (ipv4_hdr->next_proto_id == IPPROTO_TCP){
-						// 	packet_type |= RTE_PTYPE_L4_TCP;
-						// 	struct rte_tcp_hdr *tcp = (struct rte_tcp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
-						// 	dst_port = rte_be_to_cpu_16(tcp->dst_port);
-						// 	src_port = rte_be_to_cpu_16(tcp->src_port);
-						// }	
+						temp_ipv4_addr = ipv4_hdr->src_addr;
+						ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
+						ipv4_hdr->dst_addr = temp_ipv4_addr;	
 
 						if (ipv4_hdr->next_proto_id == IPPROTO_UDP){
 							packet_type |= RTE_PTYPE_L4_UDP;
-							struct rte_udp_hdr* udp = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
-							dst_port = rte_be_to_cpu_16(udp->dst_port);
-							src_port = rte_be_to_cpu_16(udp->src_port);
+							ipv4_udp_rx++;
 
-							struct alt_header* alt = (struct alt_header *)((uint8_t *)udp + sizeof(struct rte_udp_hdr));
-							uint32_t req_id = alt->request_id;
-							uint16_t service_id = alt->service_id;
+							udp = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
+							temp_udp_port = udp->src_port;
+							udp->src_port = udp->dst_port; 
+							udp->dst_port = temp_udp_port;
 
-							printf("src_port:%" PRIu16 ", dst_port:%" PRIu16 "\n", src_port, dst_port);
-							printf("service_id:%" PRIu16 "req_id:%" PRIu32 "\n", service_id, req_id);
-							printf("-------------------\n");
+							alt = (struct alt_header *)((uint8_t *)udp + sizeof(struct rte_udp_hdr));
 						}						
 
 					} 
 					else{
 						packet_type |= RTE_PTYPE_L3_IPV4_EXT;
 					}
+					//rte_pktmbuf_free(rx_pkts[i]);
 				}
 				else{
-					//printf("not eth_ipv4 type%" PRIu16 "\n", ether_type);
-				}	
-
-				rte_pktmbuf_free(rx_pkts[i]);
-			}				
-
+					//rte_pktmbuf_free(rx_pkts[i]);
+				}			
+			}							
 
 			/* Send burst of TX packets, to the same port */
-			// const uint16_t nb_tx = rte_eth_tx_burst(port, 0,
-			// 		bufs, nb_rx);
+			// const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
+			// printf("rx:%" PRIu16 ",tx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, nb_tx, ipv4_udp_rx);
 
-			/* Free any unsent packets. */
+			// /* Free any unsent packets. */
 			// if (unlikely(nb_tx < nb_rx)) {
 			// 	uint16_t buf;
 			// 	for (buf = nb_tx; buf < nb_rx; buf++)
-			// 		rte_pktmbuf_free(bufs[buf]);
+			// 		rte_pktmbuf_free(rx_pkts[buf]);
 			// }
 		}
 	}
