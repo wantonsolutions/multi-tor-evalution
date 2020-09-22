@@ -4,3 +4,6 @@ onearm_lb/l2fwd/
 onearm_lb/l3fwd/
 onearm_lb/skeleton/build/
 onearm_lb/skeleton/meson.build
+onearm_lb/test-pmd/build
+onearm_lb/test-pmd/*.o
+onearm_lb/test-pnd/*.o.cmd

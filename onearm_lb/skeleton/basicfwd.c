@@ -151,9 +151,21 @@ lcore_main(void)
 			struct rte_mbuf *rx_pkts[BURST_SIZE];
 			const uint16_t nb_rx = rte_eth_rx_burst(port, 0,
 					rx_pkts, BURST_SIZE);
-
+		
 			if (unlikely(nb_rx == 0))
 				continue;
+
+			printf("rx:%" PRIu16 "\n",nb_rx);			
+			// for (uint16_t i = 0; i < nb_rx; i++){
+			// 	struct rte_ether_hdr* eth_hdr = rte_pktmbuf_mtod(rx_pkts[i], struct rte_ether_hdr *);
+			// 	if(eth_hdr->ether_type == rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4)){
+			// 		printf("type: %x \n", eth_hdr->ether_type);
+			// 	}
+			// 	else{
+			// 		printf("type: %x \n", eth_hdr->ether_type);
+			// 	}
+			// 	rte_pktmbuf_free(rx_pkts[i]);
+			// }	
 
 			for (uint16_t i = 0; i < nb_rx; i++){
 				uint32_t packet_type = RTE_PTYPE_UNKNOWN;
@@ -239,6 +251,7 @@ lcore_main(void)
 						if (ipv4_hdr->next_proto_id == IPPROTO_UDP){
 							packet_type |= RTE_PTYPE_L4_UDP;
 							ipv4_udp_rx++;
+							printf("ipv4_udp_rx:%" PRIu16 "\n",ipv4_udp_rx);
 
 							udp_hdr = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
 							temp_udp_port = udp_hdr->src_port;
@@ -269,16 +282,19 @@ lcore_main(void)
 					//rte_pktmbuf_free(rx_pkts[i]);
 				}
 				else{
-					//rte_pktmbuf_free(rx_pkts[i]);
+					printf("type: %x \n", eth_hdr->ether_type);
+					rte_pktmbuf_free(rx_pkts[i]);
 				}
 				//rte_pktmbuf_free(rx_pkts[i]);				
 			}							
+			printf("rx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, ipv4_udp_rx);	
 
 			/* Send burst of TX packets, to the same port */
-			const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
-			printf("rx:%" PRIu16 ",tx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, nb_tx, ipv4_udp_rx);
+			//const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
+			//printf("rx:%" PRIu16 ",tx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, nb_tx, ipv4_udp_rx);
+			//printf("rx:%" PRIu16 ",tx:%" PRIu16 "\n",nb_rx, nb_tx);
 
-			// /* Free any unsent packets. */
+			// // /* Free any unsent packets. */
 			// if (unlikely(nb_tx < nb_rx)) {
 			// 	uint16_t buf;
 			// 	for (buf = nb_tx; buf < nb_rx; buf++)
