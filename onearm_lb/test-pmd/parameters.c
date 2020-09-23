@@ -1045,8 +1045,10 @@ launch_args_parse(int argc, char** argv)
 						 " must be: paired, chained or loop\n",
 						 optarg);
 			}
-			if (!strcmp(lgopts[opt_idx].name, "forward-mode"))
+			if (!strcmp(lgopts[opt_idx].name, "forward-mode")){
+				printf("forward-mode option %s\n", optarg);
 				set_pkt_forwarding_mode(optarg);
+			}
 			if (!strcmp(lgopts[opt_idx].name, "rss-ip"))
 				rss_hf = ETH_RSS_IP;
 			if (!strcmp(lgopts[opt_idx].name, "rss-udp"))

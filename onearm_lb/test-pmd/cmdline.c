@@ -6518,6 +6518,7 @@ static void cmd_set_fwd_mode_parsed(void *parsed_result,
 	struct cmd_set_fwd_mode_result *res = parsed_result;
 
 	retry_enabled = 0;
+	printf("cmd_set_fwd_mode_parsed\n");
 	set_pkt_forwarding_mode(res->mode);
 }
 
@@ -6578,6 +6579,7 @@ static void cmd_set_fwd_retry_mode_parsed(void *parsed_result,
 	struct cmd_set_fwd_retry_mode_result *res = parsed_result;
 
 	retry_enabled = 1;
+	printf("cmd_set_fwd_retry_mode_parsed\n");
 	set_pkt_forwarding_mode(res->mode);
 }
 

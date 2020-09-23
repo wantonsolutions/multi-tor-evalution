@@ -543,6 +543,8 @@ set_default_fwd_lcores_config(void)
 	unsigned int nb_lc;
 	unsigned int sock_num;
 
+	printf("set_default_fwd_lcores_config: RTE_MAX_LCORE:%u\n", RTE_MAX_LCORE);
+
 	nb_lc = 0;
 	for (i = 0; i < RTE_MAX_LCORE; i++) {
 		if (!rte_lcore_is_enabled(i))
@@ -562,12 +564,14 @@ set_default_fwd_lcores_config(void)
 	}
 	nb_lcores = (lcoreid_t) nb_lc;
 	nb_cfg_lcores = nb_lcores;
-	nb_fwd_lcores = 1;
+	//nb_fwd_lcores = 1;
+	nb_fwd_lcores = 2;
 }
 
 static void
 set_def_peer_eth_addrs(void)
 {
+	printf("set_def_peer_eth_addrs\n");
 	portid_t i;
 
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
@@ -579,6 +583,7 @@ set_def_peer_eth_addrs(void)
 static void
 set_default_fwd_ports_config(void)
 {
+	printf("set_default_fwd_ports_config\n");
 	portid_t pt_id;
 	int i = 0;
 
@@ -1401,6 +1406,7 @@ init_config(void)
 	int ret;
 
 	memset(port_per_socket,0,RTE_MAX_NUMA_NODES);
+	printf("init_config()\n");
 
 	/* Configuration of logical cores. */
 	fwd_lcores = rte_zmalloc("testpmd: fwd_lcores",
@@ -1550,7 +1556,9 @@ init_config(void)
 	if (init_fwd_streams() < 0)
 		rte_exit(EXIT_FAILURE, "FAIL from init_fwd_streams()\n");
 
-	fwd_config_setup();
+	//fwd_config_setup();
+	//simple_fwd_config_setup();
+	rss_fwd_config_setup();
 
 	/* create a gro context for each lcore */
 	gro_param.gro_types = RTE_GRO_TCP_IPV4;
@@ -2063,39 +2071,12 @@ run_pkt_fwd_on_lcore(struct fwd_lcore *fc, packet_fwd_t pkt_fwd)
 	struct fwd_stream **fsm;
 	streamid_t nb_fs;
 	streamid_t sm_id;
-#ifdef RTE_LIBRTE_BITRATE
-	uint64_t tics_per_1sec;
-	uint64_t tics_datum;
-	uint64_t tics_current;
-	uint16_t i, cnt_ports;
 
-	cnt_ports = nb_ports;
-	tics_datum = rte_rdtsc();
-	tics_per_1sec = rte_get_timer_hz();
-#endif
 	fsm = &fwd_streams[fc->stream_idx];
 	nb_fs = fc->stream_nb;
 	do {
 		for (sm_id = 0; sm_id < nb_fs; sm_id++)
 			(*pkt_fwd)(fsm[sm_id]);
-#ifdef RTE_LIBRTE_BITRATE
-		if (bitrate_enabled != 0 &&
-				bitrate_lcore_id == rte_lcore_id()) {
-			tics_current = rte_rdtsc();
-			if (tics_current - tics_datum >= tics_per_1sec) {
-				/* Periodic bitrate calculation */
-				for (i = 0; i < cnt_ports; i++)
-					rte_stats_bitrate_calc(bitrate_data,
-						ports_ids[i]);
-				tics_datum = tics_current;
-			}
-		}
-#endif
-#ifdef RTE_LIBRTE_LATENCY_STATS
-		if (latencystats_enabled != 0 &&
-				latencystats_lcore_id == rte_lcore_id())
-			rte_latencystats_update();
-#endif
 
 	} while (! fc->stopped);
 }
@@ -2103,6 +2084,7 @@ run_pkt_fwd_on_lcore(struct fwd_lcore *fc, packet_fwd_t pkt_fwd)
 static int
 start_pkt_forward_on_core(void *fwd_arg)
 {
+	printf("start_pkt_forward_on_core\n");
 	run_pkt_fwd_on_lcore((struct fwd_lcore *) fwd_arg,
 			     cur_fwd_config.fwd_eng->packet_fwd);
 	return 0;
@@ -2112,18 +2094,18 @@ start_pkt_forward_on_core(void *fwd_arg)
  * Run the TXONLY packet forwarding engine to send a single burst of packets.
  * Used to start communication flows in network loopback test configurations.
  */
-static int
-run_one_txonly_burst_on_core(void *fwd_arg)
-{
-	struct fwd_lcore *fwd_lc;
-	struct fwd_lcore tmp_lcore;
+// static int
+// run_one_txonly_burst_on_core(void *fwd_arg)
+// {
+// 	struct fwd_lcore *fwd_lc;
+// 	struct fwd_lcore tmp_lcore;
 
-	fwd_lc = (struct fwd_lcore *) fwd_arg;
-	tmp_lcore = *fwd_lc;
-	tmp_lcore.stopped = 1;
-	run_pkt_fwd_on_lcore(&tmp_lcore, tx_only_engine.packet_fwd);
-	return 0;
-}
+// 	fwd_lc = (struct fwd_lcore *) fwd_arg;
+// 	tmp_lcore = *fwd_lc;
+// 	tmp_lcore.stopped = 1;
+// 	run_pkt_fwd_on_lcore(&tmp_lcore, tx_only_engine.packet_fwd);
+// 	return 0;
+// }
 
 /*
  * Launch packet forwarding:
@@ -2133,6 +2115,7 @@ run_one_txonly_burst_on_core(void *fwd_arg)
 static void
 launch_packet_forwarding(lcore_function_t *pkt_fwd_on_lcore)
 {
+	printf("launch_packet_forwarding, interactive%" PRIu8 "\n", interactive);
 	port_fwd_begin_t port_fwd_begin;
 	unsigned int i;
 	unsigned int lc_id;
@@ -2140,9 +2123,12 @@ launch_packet_forwarding(lcore_function_t *pkt_fwd_on_lcore)
 
 	port_fwd_begin = cur_fwd_config.fwd_eng->port_fwd_begin;
 	if (port_fwd_begin != NULL) {
+		printf("port_fwd_begin != NULL\n");
 		for (i = 0; i < cur_fwd_config.nb_fwd_ports; i++)
 			(*port_fwd_begin)(fwd_ports_ids[i]);
 	}
+
+	printf("cur_fwd_config.nb_fwd_lcores:%u\n", cur_fwd_config.nb_fwd_lcores);
 	for (i = 0; i < cur_fwd_config.nb_fwd_lcores; i++) {
 		lc_id = fwd_lcores_cpuids[i];
 		if ((interactive == 0) || (lc_id != rte_lcore_id())) {
@@ -2163,25 +2149,12 @@ void
 start_packet_forwarding(int with_tx_first)
 {
 	//STW: print out with_tx_first
-	printf("with_tx_first:%d\n", with_tx_first);
+	//printf("with_tx_first:%d\n", with_tx_first);
 	port_fwd_begin_t port_fwd_begin;
 	port_fwd_end_t  port_fwd_end;
 	struct rte_port *port;
 	unsigned int i;
 	portid_t   pt_id;
-
-	if (strcmp(cur_fwd_eng->fwd_mode_name, "rxonly") == 0 && !nb_rxq)
-		rte_exit(EXIT_FAILURE, "rxq are 0, cannot use rxonly fwd mode\n");
-
-	if (strcmp(cur_fwd_eng->fwd_mode_name, "txonly") == 0 && !nb_txq)
-		rte_exit(EXIT_FAILURE, "txq are 0, cannot use txonly fwd mode\n");
-
-	if ((strcmp(cur_fwd_eng->fwd_mode_name, "rxonly") != 0 &&
-		strcmp(cur_fwd_eng->fwd_mode_name, "txonly") != 0) &&
-		(!nb_rxq || !nb_txq))
-		rte_exit(EXIT_FAILURE,
-			"Either rxq or txq are 0, cannot use %s fwd mode\n",
-			cur_fwd_eng->fwd_mode_name);
 
 	if (all_ports_started() == 0) {
 		printf("Not all ports were started\n");
@@ -2192,29 +2165,15 @@ start_packet_forwarding(int with_tx_first)
 		return;
 	}
 
-
-	if(dcb_test) {
-		for (i = 0; i < nb_fwd_ports; i++) {
-			pt_id = fwd_ports_ids[i];
-			port = &ports[pt_id];
-			if (!port->dcb_flag) {
-				printf("In DCB mode, all forwarding ports must "
-                                       "be configured in this mode.\n");
-				return;
-			}
-		}
-		if (nb_fwd_lcores == 1) {
-			printf("In DCB mode,the nb forwarding cores "
-                               "should be larger than 1.\n");
-			return;
-		}
-	}
 	test_done = 0;
 
-	fwd_config_setup();
+	//fwd_config_setup(); // it should be -> simple_fwd_config_setup();
+	//simple_fwd_config_setup();
 
-	if(!no_flush_rx)
+	if(!no_flush_rx){
+		printf("flush_fwd_rx_queues\n");
 		flush_fwd_rx_queues();
+	}
 
 	pkt_fwd_config_display(&cur_fwd_config);
 	rxtx_config_display();
@@ -2225,23 +2184,7 @@ start_packet_forwarding(int with_tx_first)
 		port = &ports[pt_id];
 		map_port_queue_stats_mapping_registers(pt_id, port);
 	}
-	if (with_tx_first) {
-		port_fwd_begin = tx_only_engine.port_fwd_begin;
-		if (port_fwd_begin != NULL) {
-			for (i = 0; i < cur_fwd_config.nb_fwd_ports; i++)
-				(*port_fwd_begin)(fwd_ports_ids[i]);
-		}
-		while (with_tx_first--) {
-			launch_packet_forwarding(
-					run_one_txonly_burst_on_core);
-			rte_eal_mp_wait_lcore();
-		}
-		port_fwd_end = tx_only_engine.port_fwd_end;
-		if (port_fwd_end != NULL) {
-			for (i = 0; i < cur_fwd_config.nb_fwd_ports; i++)
-				(*port_fwd_end)(fwd_ports_ids[i]);
-		}
-	}
+
 	launch_packet_forwarding(start_pkt_forward_on_core);
 }
 
@@ -3593,6 +3536,7 @@ init_port_dcb_config(portid_t pid,
 static void
 init_port(void)
 {
+	printf("init_port\n");
 	/* Configuration of Ethernet ports. */
 	ports = rte_zmalloc("testpmd: ports",
 			    sizeof(struct rte_port) * RTE_MAX_ETHPORTS,
@@ -3685,11 +3629,6 @@ main(int argc, char** argv)
 	if (ret != 0)
 		rte_exit(EXIT_FAILURE, "Cannot register for ethdev events");
 
-#ifdef RTE_LIBRTE_PDUMP
-	/* initialize packet capture framework */
-	rte_pdump_init();
-#endif
-
 	count = 0;
 	RTE_ETH_FOREACH_DEV(port_id) {
 		ports_ids[count] = port_id;
@@ -3702,25 +3641,16 @@ main(int argc, char** argv)
 	/* allocate port structures, and init them */
 	init_port();
 
-	set_def_fwd_config();
+	//expand set_def_fwd_config();
+	set_default_fwd_lcores_config();
+	set_def_peer_eth_addrs();
+	set_default_fwd_ports_config();
+
 	if (nb_lcores == 0)
 		rte_exit(EXIT_FAILURE, "No cores defined for forwarding\n"
 			 "Check the core mask argument\n");
 
-	/* Bitrate/latency stats disabled by default */
-#ifdef RTE_LIBRTE_BITRATE
-	bitrate_enabled = 0;
-#endif
-#ifdef RTE_LIBRTE_LATENCY_STATS
-	latencystats_enabled = 0;
-#endif
-
-	/* on FreeBSD, mlockall() is disabled by default */
-#ifdef RTE_EXEC_ENV_FREEBSD
-	do_mlockall = 0;
-#else
 	do_mlockall = 1;
-#endif
 
 	argc -= diag;
 	argv += diag;
@@ -3752,30 +3682,6 @@ main(int argc, char** argv)
 
 	init_config();
 
-	if (hot_plug) {
-		ret = rte_dev_hotplug_handle_enable();
-		if (ret) {
-			RTE_LOG(ERR, EAL,
-				"fail to enable hotplug handling.");
-			return -1;
-		}
-
-		ret = rte_dev_event_monitor_start();
-		if (ret) {
-			RTE_LOG(ERR, EAL,
-				"fail to start device event monitoring.");
-			return -1;
-		}
-
-		ret = rte_dev_event_callback_register(NULL,
-			dev_event_callback, NULL);
-		if (ret) {
-			RTE_LOG(ERR, EAL,
-				"fail  to register device event callback\n");
-			return -1;
-		}
-	}
-
 	if (!no_device_start && start_port(RTE_PORT_ALL) != 0)
 		rte_exit(EXIT_FAILURE, "Start ports failed\n");
 
@@ -3787,44 +3693,6 @@ main(int argc, char** argv)
 				port_id, rte_strerror(-ret));
 	}
 
-	/* Init metrics library */
-	rte_metrics_init(rte_socket_id());
-
-#ifdef RTE_LIBRTE_LATENCY_STATS
-	if (latencystats_enabled != 0) {
-		int ret = rte_latencystats_init(1, NULL);
-		if (ret)
-			printf("Warning: latencystats init()"
-				" returned error %d\n",	ret);
-		printf("Latencystats running on lcore %d\n",
-			latencystats_lcore_id);
-	}
-#endif
-
-	/* Setup bitrate stats */
-#ifdef RTE_LIBRTE_BITRATE
-	if (bitrate_enabled != 0) {
-		bitrate_data = rte_stats_bitrate_create();
-		if (bitrate_data == NULL)
-			rte_exit(EXIT_FAILURE,
-				"Could not allocate bitrate data.\n");
-		rte_stats_bitrate_reg(bitrate_data);
-	}
-#endif
-
-#ifdef RTE_LIBRTE_CMDLINE
-	if (strlen(cmdline_filename) != 0)
-		cmdline_read_from_file(cmdline_filename);
-
-	if (interactive == 1) {
-		if (auto_start) {
-			printf("Start automatic packet forwarding\n");
-			start_packet_forwarding(0);
-		}
-		prompt();
-		pmd_test_exit();
-	} else
-#endif
 	{
 		char c;
 		int rc;
@@ -3832,28 +3700,7 @@ main(int argc, char** argv)
 		f_quit = 0;
 
 		printf("No commandline core given, start packet forwarding\n");
-		start_packet_forwarding(tx_first);
-		if (stats_period != 0) {
-			uint64_t prev_time = 0, cur_time, diff_time = 0;
-			uint64_t timer_period;
-
-			/* Convert to number of cycles */
-			timer_period = stats_period * rte_get_timer_hz();
-
-			while (f_quit == 0) {
-				cur_time = rte_get_timer_cycles();
-				diff_time += cur_time - prev_time;
-
-				if (diff_time >= timer_period) {
-					print_stats();
-					/* Reset the timer */
-					diff_time = 0;
-				}
-				/* Sleep to avoid unnecessary checks */
-				prev_time = cur_time;
-				sleep(1);
-			}
-		}
+		start_packet_forwarding(0);
 
 		printf("Press enter to exit\n");
 		rc = read(0, &c, 1);
