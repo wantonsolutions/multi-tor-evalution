@@ -46,6 +46,14 @@
 #include <rte_ethdev.h>
 #include <rte_dev.h>
 #include <rte_string_fns.h>
+
+//ST: for packet/request redirection
+#include <netinet/in.h> // for parse string to uint32_t, because typedef uint32_t in_addr_t;
+#include <rte_hash.h>
+#include <rte_fbk_hash.h>
+#include <rte_jhash.h>
+#include <rte_hash_crc.h>
+
 #ifdef RTE_LIBRTE_IXGBE_PMD
 #include <rte_pmd_ixgbe.h>
 #endif
@@ -79,6 +87,51 @@
 
 #define EXTMEM_HEAP_NAME "extmem"
 #define EXTBUF_ZONE_SIZE RTE_PGSIZE_2M
+
+//ST: hashtable realted struct and macro for packet/request redirection
+/*
+ * Check condition and return an error if true. Assumes that "handle" is the
+ * name of the hash structure pointer to be freed.
+ */
+#define HASH_RETURN_IF_ERROR(handle, cond, str, ...) do {                \
+    if (cond) {                         \
+        printf("ERROR line %d: " str "\n", __LINE__, ##__VA_ARGS__); \
+        if (handle) rte_hash_free(handle);          \
+        return -1;                      \
+    }                               \
+} while(0)
+
+#define TOTAL_ENTRY 128
+
+//value -> uint16_t load_level but store with uint64_t format
+struct table_key {
+    uint32_t ip_dst;
+    uint16_t service_id;	
+} __rte_packed;
+
+static struct rte_hash_parameters ip2mac_params = {
+	.name = "ip2mac",
+    .entries = TOTAL_ENTRY,
+    .key_len = sizeof(uint32_t),
+    .hash_func = rte_jhash,
+    .hash_func_init_val = 0,
+    .socket_id = 0,
+};
+
+static struct rte_hash_parameters ip2load_params = {
+	.name = "ip2load",
+    .entries = TOTAL_ENTRY,
+    .key_len = sizeof(struct table_key),
+    .hash_func = rte_jhash,
+    .hash_func_init_val = 0,
+    .socket_id = 0,
+};
+
+struct table_key* ip2load_keys;
+uint64_t* ip2load_values;
+
+struct rte_hash* ip2load_table;
+struct rte_hash* ip2mac_table;
 
 uint16_t verbose_level = 0; /**< Silent by default. */
 int testpmd_logtype; /**< Log type for testpmd logs */
@@ -240,8 +293,8 @@ uint8_t dcb_test = 0;
  * Configurable number of RX/TX queues.
  */
 queueid_t nb_hairpinq; /**< Number of hairpin queues per port. */
-queueid_t nb_rxq = 1; /**< Number of RX queues per port. */
-queueid_t nb_txq = 1; /**< Number of TX queues per port. */
+queueid_t nb_rxq = 4; /**< Number of RX queues per port. */
+queueid_t nb_txq = 4; /**< Number of TX queues per port. */
 
 /*
  * Configurable number of RX/TX ring descriptors.
@@ -322,7 +375,8 @@ uint64_t noisy_lkup_num_reads_writes;
 /*
  * Receive Side Scaling (RSS) configuration.
  */
-uint64_t rss_hf = ETH_RSS_IP; /* RSS IP by default. */
+//uint64_t rss_hf = ETH_RSS_IP; /* RSS IP by default. */
+uint64_t rss_hf = ETH_RSS_UDP | ETH_RSS_TCP; /* RSS IP by default. */
 
 /*
  * Port topology configuration
@@ -1389,6 +1443,121 @@ check_nb_hairpinq(queueid_t hairpinq)
 	return 0;
 }
 
+static inline void
+print_ether_addr(const char *what, const struct rte_ether_addr *eth_addr)
+{
+	char buf[RTE_ETHER_ADDR_FMT_SIZE];
+	rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, eth_addr);
+	printf("%s%s\n", what, buf);
+}
+
+//ST: for packet/request redirection 
+/*
+*  Init two hashtables needed for redirections:
+*  1. ip->load: we'll use to 
+*     to redirect packets/requests to replicas
+*  2. ip->mac: after we determine the replica, we'll need 
+*     to update the mac addr accordingly
+*/
+static int 
+init_hashtable(void){
+	// ip2mac_table = rte_hash_create(&ip2mac_params);
+	// HASH_RETURN_IF_ERROR(ip2mac_table == NULL, "ip2mac_table creation failed");
+
+	ip2load_table = rte_hash_create(&ip2load_params);
+	HASH_RETURN_IF_ERROR(ip2load_table, ip2load_table == NULL, "ip2load_table creation failed");
+
+	// //malloc for keys and values
+	ip2load_keys = rte_malloc("ip2load_keys", sizeof(struct table_key) * TOTAL_ENTRY, 0);
+	if(ip2load_keys == NULL){
+		rte_panic("malloc failure\n");
+	}
+
+	ip2load_values = rte_zmalloc("ip2load_values", sizeof(uint64_t) * TOTAL_ENTRY, 0);
+	if(ip2load_values == NULL){
+		rte_panic("malloc failure\n");
+	}
+
+
+	//TODO: load text from files 
+	struct rte_ether_addr eth_addr1;
+	printf("ether_addr size: %zu\n", sizeof(struct rte_ether_addr)); // 6 bytes!
+	char *ip_addr = (char*) malloc(20);
+	char *mac_addr = (char*) malloc(50);
+	FILE* fp = fopen("./ip_service_load.txt", "r");
+	int service, load;
+	for(int i = 0; i < 6; i++){
+		fscanf(fp, "%s %d %d\n", ip_addr, &service, &load);
+		printf("%s,%d,%d\n", ip_addr, service, load);
+		//TODO load data into hash table here!
+	}
+	fp = fopen("./ip_mac.txt", "r");
+	for(int i = 0; i < 6; i++){
+		fscanf(fp, "%s %s\n", ip_addr, mac_addr);	
+		int ret = rte_ether_unformat_addr(mac_addr, &eth_addr1);
+		print_ether_addr("ETH_DEBUG:", &eth_addr1);
+		// if(ret >= 0)
+		// 	printf("%s,%s\n", ip_addr, mac_addr);
+		//TODO load data into hash table here!
+	}
+	free(ip_addr);
+	free(mac_addr);
+	fclose(fp);
+	return 0;
+
+	//[TEST]: pre-load values with fixed value;
+	//value -> uint16_t load_level but store with uint64_t format	
+	// struct table_key {
+	// 	uint32_t ip_dst;
+	// 	uint16_t service_id;	
+	// } __rte_packed;
+	uint32_t ip_addr1 = RTE_IPV4(4, 2, 1, 0);
+	uint32_t ip_addr2 = RTE_IPV4(4, 2, 1, 1);
+	uint64_t load1 = 1024;
+	uint64_t load2 = 512;
+	void* lookup_result;
+
+	struct table_key key1 ={
+		.ip_dst = ip_addr1,
+		.service_id = 1,
+	};
+
+	struct table_key key2 ={
+		.ip_dst = ip_addr2,
+		.service_id = 1,
+	};
+
+	struct table_key key3 ={
+		.ip_dst = ip_addr2,
+		.service_id = 2,
+	};
+
+	//* Add a key-value pair to an existing hash table. This operation is not multi-thread safe
+	//int rte_hash_add_key_data(const struct rte_hash *h, const void *key, void *data);
+	// * Find a key-value pair in the hash table. This operation is multi-thread safe with regarding to other lookup threads
+	//int rte_hash_lookup_data(const struct rte_hash *h, const void *key, void **data);
+
+	int ret = rte_hash_add_key_data(ip2load_table, (void*) &key1, (void *)((uintptr_t) load1));
+	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_add_key_data failed with data %"PRIu64"\n", load1);
+
+	ret = rte_hash_add_key_data(ip2load_table, (void*) &key2, (void *)((uintptr_t) load2));
+	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_add_key_data failed with data %"PRIu64"\n", load2);
+
+	ret = rte_hash_lookup_data(ip2load_table, (void*) &key1, &lookup_result);
+	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data should failed with data %"PRIu64"\n", (uint64_t)(uintptr_t)lookup_result);
+	//printf("lookup should find %" PRIu64 ", and it finds a value %" PRIu64 "\n", load1, (uint64_t)(uintptr_t)lookup_result);
+
+	ret = rte_hash_lookup_data(ip2load_table, (void*) &key2, &lookup_result);
+	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data should failed with data %"PRIu64"\n", (uint64_t)(uintptr_t)lookup_result);
+	//printf("lookup should find %" PRIu64 ", and it finds a value %" PRIu64 "\n", load2, (uint64_t)(uintptr_t)lookup_result);
+
+	rte_free(ip2load_keys);
+	rte_free(ip2load_values);
+	rte_hash_free(ip2load_table);
+
+	return 0;
+}
+
 static void
 init_config(void)
 {
@@ -1551,6 +1720,8 @@ init_config(void)
 			RTE_ETHER_CRC_LEN;
 		fwd_lcores[lc_id]->gso_ctx.flag = 0;
 	}
+	//ST: we need to init hashtables here, then we can init fwd_stream which has pointers to hashtables
+	init_hashtable();
 
 	/* Configuration of packet forwarding streams. */
 	if (init_fwd_streams() < 0)
@@ -3293,6 +3464,7 @@ init_port_config(void)
 
 		if (nb_rxq > 1) {
 			port->dev_conf.rx_adv_conf.rss_conf.rss_key = NULL;
+			//printf("rss_hf: %" PRIu64 "\n", rss_hf);
 			port->dev_conf.rx_adv_conf.rss_conf.rss_hf =
 				rss_hf & port->dev_info.flow_type_rss_offloads;
 		} else {
@@ -3301,12 +3473,15 @@ init_port_config(void)
 		}
 
 		if (port->dcb_flag == 0) {
-			if( port->dev_conf.rx_adv_conf.rss_conf.rss_hf != 0)
+			if( port->dev_conf.rx_adv_conf.rss_conf.rss_hf != 0){
 				port->dev_conf.rxmode.mq_mode =
 					(enum rte_eth_rx_mq_mode)
 						(rx_mq_mode & ETH_MQ_RX_RSS);
-			else
+						printf("ETH_MQ_RX_RSS \n");
+			}
+			else{
 				port->dev_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
+			}
 		}
 
 		rxtx_port_config(port);
@@ -3704,6 +3879,8 @@ main(int argc, char** argv)
 
 		printf("Press enter to exit\n");
 		rc = read(0, &c, 1);
+
+		//the clean-up of port and memory
 		pmd_test_exit();
 		if (rc < 0)
 			return 1;

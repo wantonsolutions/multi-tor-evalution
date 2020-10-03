@@ -20,6 +20,34 @@
 #include "macswap_common.h"
 #include "testpmd.h"
 
+#include <rte_hash.h>
+#include <rte_fbk_hash.h>
+#include <rte_jhash.h>
+#include <rte_hash_crc.h>
+
+
+struct table_key {
+    uint32_t ip_dst;
+    uint16_t service_id;
+} __rte_packed;
+
+static struct rte_hash_parameters ip2mac_params = {
+	.name = "ip2mac",
+    .entries = 64,
+    .key_len = sizeof(uint32_t),
+    .hash_func = rte_jhash,
+    .hash_func_init_val = 0,
+    .socket_id = 0,
+};
+
+static struct rte_hash_parameters ip2load_params = {
+	.name = "ip2load",
+    .entries = 64,
+    .key_len = sizeof(struct table_key),
+    .hash_func = rte_jhash,
+    .hash_func_init_val = 0,
+    .socket_id = 0,
+};
 
 static inline void
 swap_mac(struct rte_ether_hdr *eth_hdr)
