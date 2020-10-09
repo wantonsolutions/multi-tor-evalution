@@ -49,6 +49,10 @@
 
 //ST: for packet/request redirection
 #include <netinet/in.h> // for parse string to uint32_t, because typedef uint32_t in_addr_t;
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include "alt_header.h"
+
 #include <rte_hash.h>
 #include <rte_fbk_hash.h>
 #include <rte_jhash.h>
@@ -93,6 +97,8 @@
  * Check condition and return an error if true. Assumes that "handle" is the
  * name of the hash structure pointer to be freed.
  */
+//#define REDIRECT_DEBUG_PRINT 1
+//#define REDIRECT_HASHTABLE_TEST 1
 #define HASH_RETURN_IF_ERROR(handle, cond, str, ...) do {                \
     if (cond) {                         \
         printf("ERROR line %d: " str "\n", __LINE__, ##__VA_ARGS__); \
@@ -102,12 +108,6 @@
 } while(0)
 
 #define TOTAL_ENTRY 128
-
-//value -> uint16_t load_level but store with uint64_t format
-struct table_key {
-    uint32_t ip_dst;
-    uint16_t service_id;	
-} __rte_packed;
 
 static struct rte_hash_parameters ip2mac_params = {
 	.name = "ip2mac",
@@ -129,6 +129,9 @@ static struct rte_hash_parameters ip2load_params = {
 
 struct table_key* ip2load_keys;
 uint64_t* ip2load_values;
+
+uint32_t* ip2mac_keys;
+uint64_t* ip2mac_values;
 
 struct rte_hash* ip2load_table;
 struct rte_hash* ip2mac_table;
@@ -1461,8 +1464,135 @@ print_ether_addr(const char *what, const struct rte_ether_addr *eth_addr)
 */
 static int 
 init_hashtable(void){
-	// ip2mac_table = rte_hash_create(&ip2mac_params);
-	// HASH_RETURN_IF_ERROR(ip2mac_table == NULL, "ip2mac_table creation failed");
+	ip2mac_table = rte_hash_create(&ip2mac_params);
+	HASH_RETURN_IF_ERROR(ip2mac_table, ip2mac_table == NULL, "ip2mac_table creation failed");
+
+	ip2load_table = rte_hash_create(&ip2load_params);
+	HASH_RETURN_IF_ERROR(ip2load_table, ip2load_table == NULL, "ip2load_table creation failed");
+
+	//malloc for keys and values
+	ip2load_keys = rte_malloc("ip2load_keys", sizeof(struct table_key) * TOTAL_ENTRY, 0);
+	if(ip2load_keys == NULL){
+		rte_panic("malloc failure\n");
+	}
+
+	ip2load_values = rte_zmalloc("ip2load_values", sizeof(uint64_t) * TOTAL_ENTRY, 0);
+	if(ip2load_values == NULL){
+		rte_panic("malloc failure\n");
+	}
+
+	ip2mac_keys = rte_malloc("ip2mac_keys", sizeof(uint32_t) * TOTAL_ENTRY, 0);
+	if(ip2mac_keys == NULL){
+		rte_panic("malloc failure\n");
+	}
+
+	ip2mac_values = rte_zmalloc("ip2mac_values", sizeof(uint64_t) * TOTAL_ENTRY, 0);
+	if(ip2mac_values == NULL){
+		rte_panic("malloc failure\n");
+	}
+	
+	//* Add a key-value pair to an existing hash table. This operation is not multi-thread safe
+	//int rte_hash_add_key_data(const struct rte_hash *h, const void *key, void *data);
+	// * Find a key-value pair in the hash table. This operation is multi-thread safe with regarding to other lookup threads
+	//int rte_hash_lookup_data(const struct rte_hash *h, const void *key, void **data);
+
+	//load text from files
+	#ifdef REDIRECT_DEBUG_PRINT 
+	void* lookup_result;
+	struct rte_ether_addr* eth_addr_ptr;
+	#endif
+	//printf("ether_addr size: %zu\n", sizeof(struct rte_ether_addr)); // 6 bytes!
+	char *ip_addr = (char*) malloc(20);
+	char *mac_addr = (char*) malloc(50);
+	FILE* fp = fopen("./ip_service_load.txt", "r");
+	int service, load;
+	int num_entries;
+
+	fscanf(fp, "%d\n", &num_entries);
+	printf("ip_service_load: num_entries %d\n", num_entries);
+	for(int i = 0; i < num_entries; i++){
+		fscanf(fp, "%s %d %d\n", ip_addr, &service, &load);
+		#ifdef REDIRECT_DEBUG_PRINT
+		printf("%s,%d,%d\n", ip_addr, service, load);
+		#endif
+
+		//key:(uint32_t, uint16_t) -> value: (uint16_t)
+		ip2load_keys[i].ip_dst = (uint32_t) inet_addr(ip_addr);
+		ip2load_keys[i].service_id = (uint16_t) service;	
+		ip2load_values[i] = (uint64_t) load;
+
+		//load data into the hash table
+		int ret = rte_hash_add_key_data(ip2load_table, (void*) &ip2load_keys[i], (void *)((uintptr_t) &ip2load_values[i]));
+		HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_add_key_data failed with data %" PRIu64"\n", ip2load_values[i]);
+
+		// ret = rte_hash_lookup_data(ip2load_table, (void*) &ip2load_keys[i], &lookup_result);
+		// HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data failed with data %" PRIu64"\n", (uint64_t)(uintptr_t) lookup_result);
+		// uint64_t* ptr = (uint64_t*) lookup_result;
+		//printf("lookup should find %" PRIu64 ", and it finds a value %" PRIu64 "\n", ip2load_values[i], *ptr);
+	}
+
+	fp = fopen("./ip_mac.txt", "r");
+	fscanf(fp, "%d\n", &num_entries);
+	printf("ip_mac: num_entries %d\n", num_entries);
+	for(int i = 0; i < num_entries; i++){
+		fscanf(fp, "%s %s\n", ip_addr, mac_addr);	
+		int ret = rte_ether_unformat_addr(mac_addr, (struct rte_ether_addr*) &ip2mac_values[i]);		
+		ip2mac_keys[i] = inet_addr(ip_addr);
+		#ifdef REDIRECT_DEBUG_PRINT
+		eth_addr_ptr = (struct rte_ether_addr*) &ip2mac_values[i];
+		if(ret >= 0)
+			printf("%s,%s\n", ip_addr, mac_addr);
+		#endif
+
+		//load data into hash table here!
+		ret = rte_hash_add_key_data(ip2mac_table, (void*) &ip2mac_keys[i], (void *)((uintptr_t) &ip2mac_values[i]));
+		HASH_RETURN_IF_ERROR(ip2mac_table, ret < 0, "rte_hash_add_key_data failed with eth_addr");
+
+		#ifdef REDIRECT_DEBUG_PRINT
+		ret = rte_hash_lookup_data(ip2mac_table, (void*) &ip2mac_keys[i], &lookup_result);
+		HASH_RETURN_IF_ERROR(ip2mac_table, ret < 0, "rte_hash_lookup_data failed with eth_addr1");
+
+		struct rte_ether_addr* lookup1 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
+		printf("eth_addr insert: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		eth_addr_ptr->addr_bytes[0], eth_addr_ptr->addr_bytes[1],
+		eth_addr_ptr->addr_bytes[2], eth_addr_ptr->addr_bytes[3],
+		eth_addr_ptr->addr_bytes[4], eth_addr_ptr->addr_bytes[5]);
+
+		printf("eth_addr lookup: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		lookup1->addr_bytes[0], lookup1->addr_bytes[1],
+		lookup1->addr_bytes[2], lookup1->addr_bytes[3],
+		lookup1->addr_bytes[4], lookup1->addr_bytes[5]);
+		#endif
+	}
+	free(ip_addr);
+	free(mac_addr);
+	fclose(fp);
+
+	// rte_free(ip2load_keys);
+	// rte_free(ip2load_values);
+	// rte_free(ip2mac_keys);
+	// rte_free(ip2mac_values);
+	// rte_hash_free(ip2load_table);
+	// rte_hash_free(ip2mac_table);
+
+	return 0;
+}
+
+//ST: test cases for load/read hashtables
+/*
+*  test two hashtables
+*  1. ip->load: 
+*     key:(uint32_t, uint16_t) -> value: (uint16_t)
+*  2. ip->mac:
+*     key:(uint32_t) -> value: (struct rte_ether_addr) 6 bytes
+*/
+#ifdef REDIRECT_HASHTABLE_TEST
+static int 
+test_hashtable(void){
+	ip2mac_table = rte_hash_create(&ip2mac_params);
+	HASH_RETURN_IF_ERROR(ip2mac_table, ip2mac_table == NULL, "ip2mac_table creation failed");
 
 	ip2load_table = rte_hash_create(&ip2load_params);
 	HASH_RETURN_IF_ERROR(ip2load_table, ip2load_table == NULL, "ip2load_table creation failed");
@@ -1478,43 +1608,20 @@ init_hashtable(void){
 		rte_panic("malloc failure\n");
 	}
 
-
-	//TODO: load text from files 
-	struct rte_ether_addr eth_addr1;
-	printf("ether_addr size: %zu\n", sizeof(struct rte_ether_addr)); // 6 bytes!
-	char *ip_addr = (char*) malloc(20);
-	char *mac_addr = (char*) malloc(50);
-	FILE* fp = fopen("./ip_service_load.txt", "r");
-	int service, load;
-	for(int i = 0; i < 6; i++){
-		fscanf(fp, "%s %d %d\n", ip_addr, &service, &load);
-		printf("%s,%d,%d\n", ip_addr, service, load);
-		//TODO load data into hash table here!
-	}
-	fp = fopen("./ip_mac.txt", "r");
-	for(int i = 0; i < 6; i++){
-		fscanf(fp, "%s %s\n", ip_addr, mac_addr);	
-		int ret = rte_ether_unformat_addr(mac_addr, &eth_addr1);
-		print_ether_addr("ETH_DEBUG:", &eth_addr1);
-		// if(ret >= 0)
-		// 	printf("%s,%s\n", ip_addr, mac_addr);
-		//TODO load data into hash table here!
-	}
-	free(ip_addr);
-	free(mac_addr);
-	fclose(fp);
-	return 0;
-
 	//[TEST]: pre-load values with fixed value;
 	//value -> uint16_t load_level but store with uint64_t format	
 	// struct table_key {
 	// 	uint32_t ip_dst;
 	// 	uint16_t service_id;	
 	// } __rte_packed;
+	struct rte_ether_addr eth_addr1;
+	struct rte_ether_addr eth_addr2;
+	char* mac_addr1 = "ec:0d:9a:68:21:b0";
+	char* mac_addr2 = "ec:0d:9a:68:21:84";
 	uint32_t ip_addr1 = RTE_IPV4(4, 2, 1, 0);
 	uint32_t ip_addr2 = RTE_IPV4(4, 2, 1, 1);
-	uint64_t load1 = 1024;
-	uint64_t load2 = 512;
+	uint16_t load1 = 1024;
+	uint16_t load2 = 512;
 	void* lookup_result;
 
 	struct table_key key1 ={
@@ -1538,25 +1645,71 @@ init_hashtable(void){
 	//int rte_hash_lookup_data(const struct rte_hash *h, const void *key, void **data);
 
 	int ret = rte_hash_add_key_data(ip2load_table, (void*) &key1, (void *)((uintptr_t) load1));
-	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_add_key_data failed with data %"PRIu64"\n", load1);
+	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_add_key_data failed with data %"PRIu16"\n", load1);
 
 	ret = rte_hash_add_key_data(ip2load_table, (void*) &key2, (void *)((uintptr_t) load2));
-	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_add_key_data failed with data %"PRIu64"\n", load2);
+	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_add_key_data failed with data %"PRIu16"\n", load2);
 
 	ret = rte_hash_lookup_data(ip2load_table, (void*) &key1, &lookup_result);
-	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data should failed with data %"PRIu64"\n", (uint64_t)(uintptr_t)lookup_result);
-	//printf("lookup should find %" PRIu64 ", and it finds a value %" PRIu64 "\n", load1, (uint64_t)(uintptr_t)lookup_result);
+	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data should failed with data %"PRIu16"\n", (uint16_t)(uintptr_t)lookup_result);
+	printf("lookup should find %" PRIu16 ", and it finds a value %" PRIu16 "\n", load1, (uint16_t)(uintptr_t)lookup_result);
 
 	ret = rte_hash_lookup_data(ip2load_table, (void*) &key2, &lookup_result);
-	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data should failed with data %"PRIu64"\n", (uint64_t)(uintptr_t)lookup_result);
-	//printf("lookup should find %" PRIu64 ", and it finds a value %" PRIu64 "\n", load2, (uint64_t)(uintptr_t)lookup_result);
+	HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data should failed with data %"PRIu16"\n", (uint16_t)(uintptr_t)lookup_result);
+	printf("lookup should find %" PRIu16 ", and it finds a value %" PRIu16 "\n", load2, (uint16_t)(uintptr_t)lookup_result);
+
+	rte_ether_unformat_addr(mac_addr1, &eth_addr1);
+	print_ether_addr("ETH_DEBUG:", &eth_addr1);
+	rte_ether_unformat_addr(mac_addr2, &eth_addr2);
+	print_ether_addr("ETH_DEBUG:", &eth_addr2);
+
+	ret = rte_hash_add_key_data(ip2mac_table, (void*) &ip_addr1, (void *)((uintptr_t) &eth_addr1));
+	HASH_RETURN_IF_ERROR(ip2mac_table, ret < 0, "rte_hash_add_key_data failed with eth_addr1");
+
+	ret = rte_hash_add_key_data(ip2mac_table, (void*) &ip_addr2, (void *)((uintptr_t) &eth_addr2));
+	HASH_RETURN_IF_ERROR(ip2mac_table, ret < 0, "rte_hash_add_key_data failed with eth_addr2");
+
+	ret = rte_hash_lookup_data(ip2mac_table, (void*) &ip_addr1, &lookup_result);
+	HASH_RETURN_IF_ERROR(ip2mac_table, ret < 0, "rte_hash_lookup_data failed with eth_addr1");
+
+	struct rte_ether_addr* lookup1 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
+	printf("eth_addr1 insert: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		eth_addr1.addr_bytes[0], eth_addr1.addr_bytes[1],
+		eth_addr1.addr_bytes[2], eth_addr1.addr_bytes[3],
+		eth_addr1.addr_bytes[4], eth_addr1.addr_bytes[5]);
+
+	printf("eth_addr1 lookup: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		lookup1->addr_bytes[0], lookup1->addr_bytes[1],
+		lookup1->addr_bytes[2], lookup1->addr_bytes[3],
+		lookup1->addr_bytes[4], lookup1->addr_bytes[5]);
+
+	ret = rte_hash_lookup_data(ip2mac_table, (void*) &ip_addr2, &lookup_result);
+	HASH_RETURN_IF_ERROR(ip2mac_table, ret < 0, "rte_hash_lookup_data failed with eth_addr2");
+
+	struct rte_ether_addr* lookup2 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
+	printf("eth_addr2 insert: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		eth_addr2.addr_bytes[0], eth_addr2.addr_bytes[1],
+		eth_addr2.addr_bytes[2], eth_addr2.addr_bytes[3],
+		eth_addr2.addr_bytes[4], eth_addr2.addr_bytes[5]);
+
+	printf("eth_addr2 lookup: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		lookup2->addr_bytes[0], lookup2->addr_bytes[1],
+		lookup2->addr_bytes[2], lookup2->addr_bytes[3],
+		lookup2->addr_bytes[4], lookup2->addr_bytes[5]);
 
 	rte_free(ip2load_keys);
 	rte_free(ip2load_values);
+
 	rte_hash_free(ip2load_table);
+	rte_hash_free(ip2mac_table);
 
 	return 0;
 }
+#endif
 
 static void
 init_config(void)
@@ -1852,6 +2005,8 @@ init_fwd_streams(void)
 			if (fwd_streams[sm_id] == NULL)
 				rte_exit(EXIT_FAILURE, "rte_zmalloc"
 					 "(struct fwd_stream) failed\n");
+			fwd_streams[sm_id]->ip2load_table = ip2load_table;
+			fwd_streams[sm_id]->ip2mac_table = ip2mac_table;
 		}
 	}
 
@@ -3043,7 +3198,7 @@ void
 pmd_test_exit(void)
 {
 	portid_t pt_id;
-	int ret;
+	//int ret;
 	int i;
 
 	if (test_done == 0)
@@ -3070,33 +3225,42 @@ pmd_test_exit(void)
 		}
 	}
 
-	if (hot_plug) {
-		ret = rte_dev_event_monitor_stop();
-		if (ret) {
-			RTE_LOG(ERR, EAL,
-				"fail to stop device event monitor.");
-			return;
-		}
+	//hot_plug disable by default
+	// if (hot_plug) {
+	// 	ret = rte_dev_event_monitor_stop();
+	// 	if (ret) {
+	// 		RTE_LOG(ERR, EAL,
+	// 			"fail to stop device event monitor.");
+	// 		return;
+	// 	}
 
-		ret = rte_dev_event_callback_unregister(NULL,
-			dev_event_callback, NULL);
-		if (ret < 0) {
-			RTE_LOG(ERR, EAL,
-				"fail to unregister device event callback.\n");
-			return;
-		}
+	// 	ret = rte_dev_event_callback_unregister(NULL,
+	// 		dev_event_callback, NULL);
+	// 	if (ret < 0) {
+	// 		RTE_LOG(ERR, EAL,
+	// 			"fail to unregister device event callback.\n");
+	// 		return;
+	// 	}
 
-		ret = rte_dev_hotplug_handle_disable();
-		if (ret) {
-			RTE_LOG(ERR, EAL,
-				"fail to disable hotplug handling.\n");
-			return;
-		}
-	}
+	// 	ret = rte_dev_hotplug_handle_disable();
+	// 	if (ret) {
+	// 		RTE_LOG(ERR, EAL,
+	// 			"fail to disable hotplug handling.\n");
+	// 		return;
+	// 	}
+	// }
 	for (i = 0 ; i < RTE_MAX_NUMA_NODES ; i++) {
 		if (mempools[i])
 			rte_mempool_free(mempools[i]);
 	}
+
+	//ST: free hashtable and allocated key-value memory
+	rte_free(ip2load_keys);
+	rte_free(ip2load_values);
+	rte_free(ip2mac_keys);
+	rte_free(ip2mac_values);
+	rte_hash_free(ip2load_table);
+	rte_hash_free(ip2mac_table);
 
 	printf("\nBye...\n");
 }

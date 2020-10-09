@@ -19,40 +19,45 @@
 
 #include "macswap_common.h"
 #include "testpmd.h"
+#include "alt_header.h"
 
+//ST: for packet/request redirection
+#define REDIRECT_ENABLED 1
+//#define REDIRECT_DEBUG_PRINT 1
 #include <rte_hash.h>
 #include <rte_fbk_hash.h>
 #include <rte_jhash.h>
 #include <rte_hash_crc.h>
 
+struct rte_ether_hdr *ether_header;
+struct rte_ipv4_hdr *ipv4_header;
+struct rte_udp_hdr *udp_header;
 
-struct table_key {
-    uint32_t ip_dst;
-    uint16_t service_id;
-} __rte_packed;
-
-static struct rte_hash_parameters ip2mac_params = {
-	.name = "ip2mac",
-    .entries = 64,
-    .key_len = sizeof(uint32_t),
-    .hash_func = rte_jhash,
-    .hash_func_init_val = 0,
-    .socket_id = 0,
-};
-
-static struct rte_hash_parameters ip2load_params = {
-	.name = "ip2load",
-    .entries = 64,
-    .key_len = sizeof(struct table_key),
-    .hash_func = rte_jhash,
-    .hash_func_init_val = 0,
-    .socket_id = 0,
-};
+static inline int
+min_load(uint64_t x, uint64_t y, uint64_t z){
+  return x < y ? (x < z ? 1 : 3) : (y < z ? 2 : 3);
+}
 
 static inline void
 swap_mac(struct rte_ether_hdr *eth_hdr)
 {
 	struct rte_ether_addr addr;
+
+	#ifdef REDIRECT_DEBUG_PRINT
+	struct rte_ether_addr src_macaddr = eth_hdr->s_addr;
+	struct rte_ether_addr dst_macaddr = eth_hdr->d_addr;
+	printf("src_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+		" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		src_macaddr.addr_bytes[0], src_macaddr.addr_bytes[1],
+		src_macaddr.addr_bytes[2], src_macaddr.addr_bytes[3],
+		src_macaddr.addr_bytes[4], src_macaddr.addr_bytes[5]);
+
+	printf("dst_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+		" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		dst_macaddr.addr_bytes[0], dst_macaddr.addr_bytes[1],
+		dst_macaddr.addr_bytes[2], dst_macaddr.addr_bytes[3],
+		dst_macaddr.addr_bytes[4], dst_macaddr.addr_bytes[5]);
+	#endif
 
 	/* Swap dest and src mac addresses. */
 	rte_ether_addr_copy(&eth_hdr->d_addr, &addr);
@@ -64,6 +69,26 @@ static inline void
 swap_ipv4(struct rte_ipv4_hdr *ipv4_hdr)
 {
 	rte_be32_t addr;
+
+	#ifdef REDIRECT_DEBUG_PRINT
+	uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_hdr->src_addr);
+	uint32_t dst_ipaddr = rte_be_to_cpu_32(ipv4_hdr->dst_addr);
+	uint8_t src_addr[4];
+	src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
+	src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
+	src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
+	src_addr[3] = (uint8_t) src_ipaddr & 0xff;
+	printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+			src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+	
+	uint8_t dst_addr[4];
+	dst_addr[0] = (uint8_t) (dst_ipaddr >> 24) & 0xff;
+	dst_addr[1] = (uint8_t) (dst_ipaddr >> 16) & 0xff;
+	dst_addr[2] = (uint8_t) (dst_ipaddr >> 8) & 0xff;
+	dst_addr[3] = (uint8_t) dst_ipaddr & 0xff;
+	printf("dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+		dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
+	#endif	
 
 	/* Swap dest and src ipv4 addresses. */
 	addr = ipv4_hdr->src_addr;
@@ -123,6 +148,10 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 	uint32_t retry;
 
 	int i;
+	void* lookup_result;
+	struct table_key ip_service_key;
+	rte_be32_t ip_mac_key;
+
 	union {
 		struct rte_ether_hdr *eth;
 		struct rte_vlan_hdr *vlan;
@@ -130,6 +159,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 		struct rte_ipv6_hdr *ipv6;
 		struct rte_tcp_hdr *tcp;
 		struct rte_udp_hdr *udp;
+		struct alt_header *alt;
 		uint8_t *byte;
 	} h;
 
@@ -166,17 +196,24 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 					void *));
 		mb = pkts_burst[i];
 		h.eth = rte_pktmbuf_mtod(mb, struct rte_ether_hdr *);
+		ether_header = rte_pktmbuf_mtod(mb, struct rte_ether_hdr *);
+		printf("eth_hdr:%p\n", (void *) ether_header);
 		proto = h.eth->ether_type;
 		swap_mac(h.eth);
 		mb->l2_len = sizeof(struct rte_ether_hdr);
 		h.eth++;
+
+		// Presumably we don't have VLAN setup on AWS?
 		while (proto == RTE_BE16(RTE_ETHER_TYPE_VLAN) ||
 		       proto == RTE_BE16(RTE_ETHER_TYPE_QINQ)) {
 			proto = h.vlan->eth_proto;
 			h.vlan++;
 			mb->l2_len += sizeof(struct rte_vlan_hdr);
 		}
+
 		if (proto == RTE_BE16(RTE_ETHER_TYPE_IPV4)) {
+			ipv4_header = h.ipv4;
+			printf("ipv4_hdr:%p\n", (void *) ipv4_header);			
 			swap_ipv4(h.ipv4);
 			next_proto = h.ipv4->next_proto_id;
 			mb->l3_len = (h.ipv4->version_ihl & 0x0f) * 4;
@@ -190,15 +227,257 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 			mbuf_field_set(mb, ol_flags);
 			continue;
 		}
+
 		if (next_proto == IPPROTO_UDP) {
-			swap_udp(h.udp);
+			udp_header = h.udp;
+			printf("h.udp:%p\n", (void *) h.udp);
+			swap_udp(h.udp);	
 			mb->l4_len = sizeof(struct rte_udp_hdr);
+			h.byte += mb->l4_len;
+			#ifdef REDIRECT_ENABLED
+			// the whole if section is working with fixed redirection
+			if( get_alt_header_msgtype(h.alt) == SINGLE_PKT_REQ){ 				
+				//|| (alt_header_msgtype(h.alt) == MULTI_PKT_REQ && alt_header_isfirst(h.alt) == 1) ){							
+				//redirecting packets!				
+				#ifdef REDIRECT_DEBUG_PRINT 
+				printf("pkt service_id: %" PRIu16 "\n", h.alt->service_id);
+				printf("pkt type: %" PRIu8 "\n", get_alt_header_msgtype(h.alt));
+				#endif
+				uint64_t load1 = 0, load2 = 0, load3 = 0;
+				ip_service_key.service_id = h.alt->service_id;
+
+				// look up load based on service id and dst ip addr 1 to 3.
+				// TODO: OPT Use bulk lookup?
+				ip_service_key.ip_dst = h.alt->alt_dst_ip;
+				int ret = rte_hash_lookup_data(fs->ip2load_table, (void*) &ip_service_key, &lookup_result);
+				if(ret >= 0){
+					uint64_t* ptr = (uint64_t*) lookup_result;
+					load1 = *ptr; 
+				}
+				else{
+					load1 = UINT64_MAX;
+				}	
+
+				ip_service_key.ip_dst = h.alt->alt_dst_ip2;
+				ret = rte_hash_lookup_data(fs->ip2load_table, (void*) &ip_service_key, &lookup_result);
+				if(ret >= 0){
+					uint64_t* ptr = (uint64_t*) lookup_result;
+					load2 = *ptr; 
+				}
+				else{
+					load2 = UINT64_MAX;
+				}				
+
+				ip_service_key.ip_dst = h.alt->alt_dst_ip3;
+				ret = rte_hash_lookup_data(fs->ip2load_table, (void*) &ip_service_key, &lookup_result);
+				if(ret >= 0){
+					uint64_t* ptr = (uint64_t*) lookup_result;
+					load3 = *ptr; 
+				}
+				else{
+					load3 = UINT64_MAX;
+				}	
+
+				// look up src mac addr for our ip src addr				
+				// ret = rte_hash_lookup_data(fs->ip2mac_table, (void*) &ipv4_header->src_addr, &lookup_result);
+				// if(ret >= 0){
+				// 	struct rte_ether_addr* lookup1 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
+				// 	#ifdef REDIRECT_DEBUG_PRINT 
+				// 	printf("eth_addr lookup: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+				// 		" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+				// 	lookup1->addr_bytes[0], lookup1->addr_bytes[1],
+				// 	lookup1->addr_bytes[2], lookup1->addr_bytes[3],
+				// 	lookup1->addr_bytes[4], lookup1->addr_bytes[5]);
+				// 	#endif
+				// }
+				// else{
+				// 	if (errno == ENOENT)
+				// 		printf("value not found\n");
+				// 	else
+				// 		printf("invalid parameters\n");
+				// }
+
+				// a potential problem here: what if we don't get all three values?
+				// -> we set missing values to UINT64_MAX, so it's unlikely they'll get selected.
+				int min_index = min_load(load1,load2,load3);
+				#ifdef REDIRECT_DEBUG_PRINT 
+				printf("min index: %d\n", min_index);				
+				#endif
+				// swap the ip src_addr back because we're a switch! 				
+				ipv4_header->src_addr = ipv4_header->dst_addr; 
+				// Assign ip dst addr
+				if(min_index == 1){
+					ipv4_header->dst_addr = h.alt->alt_dst_ip;
+				}
+				else if(min_index == 2){
+					ipv4_header->dst_addr = h.alt->alt_dst_ip2;
+				}
+				else if(min_index == 3){
+					ipv4_header->dst_addr = h.alt->alt_dst_ip3;
+				}
+
+				#ifdef REDIRECT_DEBUG_PRINT 
+				uint8_t temp_addrs[4];
+				uint32_t temp_ipaddr = rte_be_to_cpu_32(ipv4_header->dst_addr);
+				temp_addrs[0] = (uint8_t) (temp_ipaddr >> 24) & 0xff;
+				temp_addrs[1] = (uint8_t) (temp_ipaddr >> 16) & 0xff;
+				temp_addrs[2] = (uint8_t) (temp_ipaddr >> 8) & 0xff;
+				temp_addrs[3] = (uint8_t) temp_ipaddr & 0xff;
+				printf("ipv4_header->dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+						temp_addrs[0], temp_addrs[1], temp_addrs[2], temp_addrs[3]);
+				#endif
+
+				// look up dst mac addr for our ip dest addr				
+				ret = rte_hash_lookup_data(fs->ip2mac_table, (void*) &ipv4_header->dst_addr, &lookup_result);
+				if(ret >= 0){
+					struct rte_ether_addr* lookup1 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
+					#ifdef REDIRECT_DEBUG_PRINT 
+					printf("eth_addr lookup: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+					lookup1->addr_bytes[0], lookup1->addr_bytes[1],
+					lookup1->addr_bytes[2], lookup1->addr_bytes[3],
+					lookup1->addr_bytes[4], lookup1->addr_bytes[5]);
+					#endif
+					// Assign lookup result to dest ether addr
+					// rte_ether_addr_copy (const struct rte_ether_addr *ea_from, struct rte_ether_addr *ea_to)
+					rte_ether_addr_copy(lookup1, &ether_header->d_addr);
+				}
+				else{
+					if (errno == ENOENT)
+						printf("value not found\n");
+					else
+						printf("invalid parameters\n");
+				}
+
+				//TEST-ONLY HARDCODE that redirect to yeti-05
+				//char* mac_addr_yeti05 = "ec:0d:9a:68:21:a0";
+				//rte_ether_unformat_addr(mac_addr_yeti05, &ether_header->d_addr);
+
+				// swap it back so UDP packets are delivered to the correct port after redirection!
+				swap_udp(udp_header);
+
+				// update checksum!
+				udp_header->dgram_cksum = 0;
+            	udp_header->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_header, (void*)udp_header);
+				ipv4_header->hdr_checksum = rte_ipv4_cksum(ipv4_header);
+
+				#ifdef REDIRECT_DEBUG_PRINT 
+				printf("-------- redirection modification start------\n");
+
+				printf("eth_addr src: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+					ether_header->s_addr.addr_bytes[0], ether_header->s_addr.addr_bytes[1],
+					ether_header->s_addr.addr_bytes[2], ether_header->s_addr.addr_bytes[3],
+					ether_header->s_addr.addr_bytes[4], ether_header->s_addr.addr_bytes[5]);
+
+				printf("eth_addr dst: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+					ether_header->d_addr.addr_bytes[0], ether_header->d_addr.addr_bytes[1],
+					ether_header->d_addr.addr_bytes[2], ether_header->d_addr.addr_bytes[3],
+					ether_header->d_addr.addr_bytes[4], ether_header->d_addr.addr_bytes[5]);
+
+				uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_header->src_addr);
+				uint32_t dst_ipaddr = rte_be_to_cpu_32(ipv4_header->dst_addr);
+				uint8_t src_addr[4];
+				src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
+				src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
+				src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
+				src_addr[3] = (uint8_t) src_ipaddr & 0xff;
+				printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+						src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+				
+				uint8_t dst_addr[4];
+				dst_addr[0] = (uint8_t) (dst_ipaddr >> 24) & 0xff;
+				dst_addr[1] = (uint8_t) (dst_ipaddr >> 16) & 0xff;
+				dst_addr[2] = (uint8_t) (dst_ipaddr >> 8) & 0xff;
+				dst_addr[3] = (uint8_t) dst_ipaddr & 0xff;
+				printf("dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+						dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
+				printf("-------- redirection modification end------\n");
+				#endif /* REDIRECT_DEBUG_PRINT */			
+			}
+
+			//TODO: [UNTESTED], we need proper way to free packets
+			// else if(get_alt_header_msgtype(h.alt) == HOST_FEEDBACK_MSG){				 
+			// 	uint64_t load = (uint64_t) h.alt->feedback_options;
+			// 	ip_service_key.service_id = h.alt->service_id;
+			// 	ip_service_key.ip_dst = h.alt->alt_dst_ip;
+			// 	//update values
+			// 	int ret = rte_hash_add_key_data(ip2load_table, (void*) &ip_service_key, (void *)((uintptr_t) &load));
+			// 	//rte_pktmbuf_free(pkts_burst[i]);
+			// }
+
+			//TODO: [UNTESTED]
+			// 1. assign the alt_dst_ip which is the real dest ip to ipv4_header->dst_addr
+			// 2. lookup the mac address of alt_dst_ip in ip2mac table
+			// 3. modify the dest mac addr
+			else if(get_alt_header_msgtype(h.alt) == SINGLE_PKT_RESP_PASSTHROUGH){
+				ipv4_header->dst_addr = h.alt->alt_dst_ip;
+				int ret = rte_hash_lookup_data(fs->ip2mac_table, (void*) &ipv4_header->dst_addr, &lookup_result);
+				if(ret >= 0){
+					struct rte_ether_addr* lookup1 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
+					#ifdef REDIRECT_DEBUG_PRINT 
+					printf("eth_addr lookup: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+					lookup1->addr_bytes[0], lookup1->addr_bytes[1],
+					lookup1->addr_bytes[2], lookup1->addr_bytes[3],
+					lookup1->addr_bytes[4], lookup1->addr_bytes[5]);
+					#endif
+					// Assign lookup result to dest ether addr
+					rte_ether_addr_copy(lookup1, &ether_header->d_addr);
+				}
+				else{
+					if (errno == ENOENT)
+						printf("value not found\n");
+					else
+						printf("invalid parameters\n");
+				}
+
+				// update checksum!
+				udp_header->dgram_cksum = 0;
+            	udp_header->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_header, (void*)udp_header);
+				ipv4_header->hdr_checksum = rte_ipv4_cksum(ipv4_header);
+			}	
+
+			//TODO:
+			// 1. assign the alt_dst_ip which is the real dest ip to ipv4_header->dst_addr
+			// 2. lookup the mac address of alt_dst_ip in ip2mac table
+			// 3. modify the dest mac addr
+			// 4. update the ip2load_table like HOST_FEEDBACK_MSG
+			//else if(get_alt_header_msgtype(h.alt) == SINGLE_PKT_RESP_PASSTHROUGH){				 
+			//}
+
+			//TODO:
+			// 1. update the ip2load_table like HOST_FEEDBACK_MSG
+			// 2. update the last updated time of a switch entry in a table
+			//else if(get_alt_header_msgtype(h.alt) == SWITCH_FEEDBACK_MSG){				 
+			//}
+
+			#endif /* REDIRECT_ENABLED */
 		} else if (next_proto == IPPROTO_TCP) {
 			swap_tcp(h.tcp);
 			mb->l4_len = (h.tcp->data_off & 0xf0) >> 2;
 		}
 		mbuf_field_set(mb, ol_flags);
 	}
+	printf("--------\n");
+	// TODO: Handle packets don't need to be sent out
+	// Method 1:
+	// 1. increment drop_pkt counter, record its index in pkts_burst array to a separated array
+	// 2. if(drop_pkt==0)
+	//    	nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx)
+	// 3. if(drop_pkt > 0)
+	//     calculate how many consecutive sub-array we have
+	//     T is for pkts for TX, and D is for pkts need to be DROP
+	//     e.g. TTTDTTTDTT
+	//     we'll need 3 rte_eth_tx_burst calls and 2 rte_pktmbuf_free calls
+	//     -> for(number of rte_eth_tx_burst calls)
+	//			rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
+	//
+	// Method 2:
+	// rte_eth_tx_buffer() per packet
+	// dpdk_flush if (++RTE_PER_LCORE(packet_count) == 32)
+
 	nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
 	/*
 	 * Retry if necessary
