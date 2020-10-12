@@ -10,3 +10,4 @@ onearm_lb/test-pmd/*build
 onearm_lb/test-pmd/*.o*
 onearm_lb/test-pmd/*.cmd
 onearm_lb/test-pmd/*.map
+onearm_lb/log/

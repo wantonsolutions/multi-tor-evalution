@@ -32,6 +32,7 @@
 struct rte_ether_hdr *ether_header;
 struct rte_ipv4_hdr *ipv4_header;
 struct rte_udp_hdr *udp_header;
+int passthrough_counter = 0; 
 
 static inline int
 min_load(uint64_t x, uint64_t y, uint64_t z){
@@ -151,6 +152,8 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 	void* lookup_result;
 	struct table_key ip_service_key;
 	rte_be32_t ip_mac_key;
+	int drop_index_list[128];
+	int drop_index = 0;
 
 	union {
 		struct rte_ether_hdr *eth;
@@ -197,7 +200,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 		mb = pkts_burst[i];
 		h.eth = rte_pktmbuf_mtod(mb, struct rte_ether_hdr *);
 		ether_header = rte_pktmbuf_mtod(mb, struct rte_ether_hdr *);
-		printf("eth_hdr:%p\n", (void *) ether_header);
+		//printf("eth_hdr:%p\n", (void *) ether_header);
 		proto = h.eth->ether_type;
 		swap_mac(h.eth);
 		mb->l2_len = sizeof(struct rte_ether_hdr);
@@ -213,7 +216,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 
 		if (proto == RTE_BE16(RTE_ETHER_TYPE_IPV4)) {
 			ipv4_header = h.ipv4;
-			printf("ipv4_hdr:%p\n", (void *) ipv4_header);			
+			//printf("ipv4_hdr:%p\n", (void *) ipv4_header);			
 			swap_ipv4(h.ipv4);
 			next_proto = h.ipv4->next_proto_id;
 			mb->l3_len = (h.ipv4->version_ihl & 0x0f) * 4;
@@ -230,12 +233,14 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 
 		if (next_proto == IPPROTO_UDP) {
 			udp_header = h.udp;
-			printf("h.udp:%p\n", (void *) h.udp);
+			//printf("h.udp:%p\n", (void *) h.udp);
 			swap_udp(h.udp);	
 			mb->l4_len = sizeof(struct rte_udp_hdr);
 			h.byte += mb->l4_len;
 			#ifdef REDIRECT_ENABLED
 			// the whole if section is working with fixed redirection
+			uint8_t type = get_alt_header_msgtype(h.alt);
+			//printf("alt_header type:%" PRIu8 "\n", type);
 			if( get_alt_header_msgtype(h.alt) == SINGLE_PKT_REQ){ 				
 				//|| (alt_header_msgtype(h.alt) == MULTI_PKT_REQ && alt_header_isfirst(h.alt) == 1) ){							
 				//redirecting packets!				
@@ -359,6 +364,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 				// update checksum!
 				udp_header->dgram_cksum = 0;
             	udp_header->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_header, (void*)udp_header);
+				ipv4_header->hdr_checksum = 0;
 				ipv4_header->hdr_checksum = rte_ipv4_cksum(ipv4_header);
 
 				#ifdef REDIRECT_DEBUG_PRINT 
@@ -395,29 +401,67 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 						dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
 				printf("-------- redirection modification end------\n");
 				#endif /* REDIRECT_DEBUG_PRINT */			
+			}			
+			else if(get_alt_header_msgtype(h.alt) == HOST_FEEDBACK_MSG){
+				//TODO: [UNTESTED], we need proper way to free packets				 
+				uint64_t load = (uint64_t) h.alt->feedback_options;
+				printf("load: %" PRIu64 " from", load);
+				//after ip swap: dst is the src here
+				ipv4_header->src_addr = ipv4_header->dst_addr;
+				uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_header->src_addr);
+				
+				uint8_t src_addr[4];
+				src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
+				src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
+				src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
+				src_addr[3] = (uint8_t) src_ipaddr & 0xff;
+				printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+						src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+
+				ip_service_key.service_id = h.alt->service_id;
+				ip_service_key.ip_dst = h.alt->alt_dst_ip;
+				//update values
+				int ret = rte_hash_add_key_data(fs->ip2load_table, (void*) &ip_service_key, (void *)((uintptr_t) &load));
+				drop_index_list[drop_index] = i;
+				drop_index++;
+				//rte_pktmbuf_free(pkts_burst[i]);
 			}
-
-			//TODO: [UNTESTED], we need proper way to free packets
-			// else if(get_alt_header_msgtype(h.alt) == HOST_FEEDBACK_MSG){				 
-			// 	uint64_t load = (uint64_t) h.alt->feedback_options;
-			// 	ip_service_key.service_id = h.alt->service_id;
-			// 	ip_service_key.ip_dst = h.alt->alt_dst_ip;
-			// 	//update values
-			// 	int ret = rte_hash_add_key_data(ip2load_table, (void*) &ip_service_key, (void *)((uintptr_t) &load));
-			// 	//rte_pktmbuf_free(pkts_burst[i]);
-			// }
-
-			//TODO: [UNTESTED]
-			// 1. assign the alt_dst_ip which is the real dest ip to ipv4_header->dst_addr
-			// 2. lookup the mac address of alt_dst_ip in ip2mac table
-			// 3. modify the dest mac addr
 			else if(get_alt_header_msgtype(h.alt) == SINGLE_PKT_RESP_PASSTHROUGH){
+				// 1. assign the alt_dst_ip which is the real dest ip to ipv4_header->dst_addr
+				// 2. lookup the mac address of alt_dst_ip in ip2mac table
+				// 3. modify the dest mac addr
+
+				// uint64_t recv_counter = (uint64_t) h.alt->feedback_options;
+				// printf("recv_counter: %" PRIu64 " from \n", recv_counter);
+
+				// swap the ip src_addr back because we're a switch! 				
+				ipv4_header->src_addr = ipv4_header->dst_addr;
 				ipv4_header->dst_addr = h.alt->alt_dst_ip;
+
+				// uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_header->src_addr);				
+				// uint8_t src_addr[4];
+				// src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
+				// src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
+				// src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
+				// src_addr[3] = (uint8_t) src_ipaddr & 0xff;		
+				// printf("ipv4_header->src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+				// 		src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+
+				// uint8_t temp_addrs[4];
+				// uint32_t temp_ipaddr = rte_be_to_cpu_32(ipv4_header->dst_addr);
+				// temp_addrs[0] = (uint8_t) (temp_ipaddr >> 24) & 0xff;
+				// temp_addrs[1] = (uint8_t) (temp_ipaddr >> 16) & 0xff;
+				// temp_addrs[2] = (uint8_t) (temp_ipaddr >> 8) & 0xff;
+				// temp_addrs[3] = (uint8_t) temp_ipaddr & 0xff;
+				// printf("ipv4_header->dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+				// 		temp_addrs[0], temp_addrs[1], temp_addrs[2], temp_addrs[3]);
+
 				int ret = rte_hash_lookup_data(fs->ip2mac_table, (void*) &ipv4_header->dst_addr, &lookup_result);
 				if(ret >= 0){
 					struct rte_ether_addr* lookup1 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
-					#ifdef REDIRECT_DEBUG_PRINT 
-					printf("eth_addr lookup: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+					#ifdef REDIRECT_DEBUG_PRINT
+					// printf("SINGLE_PKT_RESP_PASSTHROUGH\n");					 
+					printf("eth_dst_addr lookup: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
 						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
 					lookup1->addr_bytes[0], lookup1->addr_bytes[1],
 					lookup1->addr_bytes[2], lookup1->addr_bytes[3],
@@ -433,10 +477,15 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 						printf("invalid parameters\n");
 				}
 
+				// swap it back so UDP packets are delivered to the correct port after redirection!
+				swap_udp(udp_header);
+
 				// update checksum!
 				udp_header->dgram_cksum = 0;
             	udp_header->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_header, (void*)udp_header);
+				ipv4_header->hdr_checksum = 0;
 				ipv4_header->hdr_checksum = rte_ipv4_cksum(ipv4_header);
+				passthrough_counter++;
 			}	
 
 			//TODO:
@@ -473,12 +522,51 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 	//     we'll need 3 rte_eth_tx_burst calls and 2 rte_pktmbuf_free calls
 	//     -> for(number of rte_eth_tx_burst calls)
 	//			rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
-	//
+
+	//[UNTEST]
+	//test-plan: 
+	// 1. (V) the server host sends only HOST_FEEDBACK_MSG packets
+	// 2. (V) the server host sends SINGLE_PKT_RESP_PASSTHROUGH and HOST_FEEDBACK_MSG together
+	// a. (V) low rate, b. () high rate
+	// 3. () the client sends SINGLE_PKT_REQ and server sends both SINGLE_PKT_RESP_PASSTHROUGH and HOST_FEEDBACK_MSG
+	if(drop_index == 0){
+		nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
+	}
+	else{
+		//send out burst of packets separated by packets needs to be drop/freed
+		int lower_bound = 0;
+		int num_pkt = drop_index_list[0]; //- lower_bound;
+		if(num_pkt > 0)
+			nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, num_pkt);			
+		lower_bound = lower_bound + num_pkt + 1;
+
+		for(int j = 1; j < drop_index; j++){
+			num_pkt = drop_index_list[j] - lower_bound;
+
+			if(num_pkt > 0)
+				nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, &pkts_burst[lower_bound], num_pkt);
+
+			lower_bound = lower_bound + num_pkt + 1;
+		}
+
+		//free those packets
+		for(int j = 0; j < drop_index; j++){
+			//printf("free packet %d\n", j);
+			int pkt_index = drop_index_list[j];
+			rte_pktmbuf_free(pkts_burst[pkt_index]);
+			drop_index_list[j] = 0;
+		}
+
+		drop_index = 0;
+	}
+	
 	// Method 2:
 	// rte_eth_tx_buffer() per packet
 	// dpdk_flush if (++RTE_PER_LCORE(packet_count) == 32)
 
-	nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
+	//old rte_eth_tx_burst
+	//nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
+
 	/*
 	 * Retry if necessary
 	 */

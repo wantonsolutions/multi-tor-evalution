@@ -136,6 +136,10 @@ uint64_t* ip2mac_values;
 struct rte_hash* ip2load_table;
 struct rte_hash* ip2mac_table;
 
+//ST: use rte_eth_dev_tx_buffer to deal with per-packet send/drop
+//TODO: see 5tswap.c for more detail
+//RTE_DECLARE_PER_LCORE(struct rte_eth_dev_tx_buffer *, tx_buf);
+
 uint16_t verbose_level = 0; /**< Silent by default. */
 int testpmd_logtype; /**< Log type for testpmd logs */
 
