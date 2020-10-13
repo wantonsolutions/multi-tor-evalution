@@ -155,6 +155,8 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 	int drop_index_list[128];
 	int drop_index = 0;
 
+	struct timespec ts1, ts2;
+
 	union {
 		struct rte_ether_hdr *eth;
 		struct rte_vlan_hdr *vlan;
@@ -175,6 +177,8 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	start_tsc = rte_rdtsc();
 #endif
+
+	clock_gettime(CLOCK_REALTIME, &ts1);
 
 	/*
 	 * Receive a burst of packets and forward them.
@@ -405,18 +409,17 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 			else if(get_alt_header_msgtype(h.alt) == HOST_FEEDBACK_MSG){
 				//TODO: [UNTESTED], we need proper way to free packets				 
 				uint64_t load = (uint64_t) h.alt->feedback_options;
-				printf("load: %" PRIu64 " from", load);
+				//printf("load: %" PRIu64 " from", load);
 				//after ip swap: dst is the src here
 				ipv4_header->src_addr = ipv4_header->dst_addr;
-				uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_header->src_addr);
-				
-				uint8_t src_addr[4];
-				src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
-				src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
-				src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
-				src_addr[3] = (uint8_t) src_ipaddr & 0xff;
-				printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
-						src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+				//uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_header->src_addr);				
+				// uint8_t src_addr[4];
+				// src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
+				// src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
+				// src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
+				// src_addr[3] = (uint8_t) src_ipaddr & 0xff;
+				// printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+				// 		src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
 
 				ip_service_key.service_id = h.alt->service_id;
 				ip_service_key.ip_dst = h.alt->alt_dst_ip;
@@ -493,7 +496,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 			// 2. lookup the mac address of alt_dst_ip in ip2mac table
 			// 3. modify the dest mac addr
 			// 4. update the ip2load_table like HOST_FEEDBACK_MSG
-			//else if(get_alt_header_msgtype(h.alt) == SINGLE_PKT_RESP_PASSTHROUGH){				 
+			//else if(get_alt_header_msgtype(h.alt) == SINGLE_PKT_RESP_PIGGYBACK){				 
 			//}
 
 			//TODO:
@@ -509,7 +512,9 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 		}
 		mbuf_field_set(mb, ol_flags);
 	}
-	printf("--------\n");
+
+	//printf("--------\n");
+
 	// TODO: Handle packets don't need to be sent out
 	// Method 1:
 	// 1. increment drop_pkt counter, record its index in pkts_burst array to a separated array
@@ -523,12 +528,11 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 	//     -> for(number of rte_eth_tx_burst calls)
 	//			rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
 
-	//[UNTEST]
-	//test-plan: 
+	//tested: 
 	// 1. (V) the server host sends only HOST_FEEDBACK_MSG packets
 	// 2. (V) the server host sends SINGLE_PKT_RESP_PASSTHROUGH and HOST_FEEDBACK_MSG together
 	// a. (V) low rate, b. () high rate
-	// 3. () the client sends SINGLE_PKT_REQ and server sends both SINGLE_PKT_RESP_PASSTHROUGH and HOST_FEEDBACK_MSG
+	// 3. (V) the client sends SINGLE_PKT_REQ and server sends both SINGLE_PKT_RESP_PASSTHROUGH and HOST_FEEDBACK_MSG
 	if(drop_index == 0){
 		nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
 	}
@@ -593,6 +597,24 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 	core_cycles = (end_tsc - start_tsc);
 	fs->core_cycles = (uint64_t) (fs->core_cycles + core_cycles);
 #endif
+	clock_gettime(CLOCK_REALTIME, &ts2);
+
+	if(ts1.tv_sec == ts2.tv_sec){
+		//fs->latency_records
+		//fprintf(fp, "%" PRIu64 "\n", ts2.tv_nsec - ts1.tv_nsec); 	
+		if (next_proto == IPPROTO_UDP) 	
+			//printf("queue_id %" PRIu16 ":%" PRIu64 "\n", fs->rx_queue, ts2.tv_nsec - ts1.tv_nsec);
+			printf("%" PRIu64 "\n", ts2.tv_nsec - ts1.tv_nsec);
+	}
+	else{ 
+		uint64_t ts1_nsec = ts1.tv_nsec + 1000000000*ts1.tv_sec;
+		uint64_t ts2_nsec = ts2.tv_nsec + 1000000000*ts2.tv_sec;                    
+		//fprintf(fp, "%" PRIu64 "\n", ts2_nsec - ts1_nsec);
+		if (next_proto == IPPROTO_UDP) 
+			printf("%" PRIu64 "\n", ts2_nsec - ts1_nsec);
+			//printf("queue_id %" PRIu16 ":%" PRIu64 "\n", fs->rx_queue, ts2_nsec - ts1_nsec);
+	}
+
 }
 
 struct fwd_engine five_tuple_swap_fwd_engine = {

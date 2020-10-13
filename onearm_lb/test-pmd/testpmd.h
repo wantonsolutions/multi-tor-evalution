@@ -7,6 +7,9 @@
 
 #include <stdbool.h>
 
+//ST: include for clock_gettime()
+#include <time.h>
+
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_gro.h>
@@ -133,6 +136,7 @@ struct fwd_stream {
 	//ST: use hash table to lookup load and mac addr for rediretion
 	struct rte_hash *ip2load_table; //
 	struct rte_hash *ip2mac_table;  // read-only after init
+	uint64_t* latency_records;
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	uint64_t     core_cycles; /**< used for RX and TX processing */
 #endif
@@ -141,8 +145,7 @@ struct fwd_stream {
 	struct pkt_burst_stats tx_burst_stats;
 #endif
 };
-//ST:
-RTE_DECLARE_PER_LCORE(struct rte_eth_dev_tx_buffer *, tx_buf);
+
 
 /** Descriptor for a single flow. */
 struct port_flow {
