@@ -183,9 +183,9 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 	/*
 	 * Receive a burst of packets and forward them.
 	 */
-	// recv 1 packet at a time
-	nb_pkt_per_burst = 1;
-	nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, pkts_burst, nb_pkt_per_burst);
+	// nb_pkt_per_burst is defined as DEF_PKT_BURST=32
+	nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, pkts_burst,
+				 nb_pkt_per_burst);
 	if (unlikely(nb_rx == 0))
 		return;
 
@@ -199,9 +199,9 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 	vlan_qinq_set(pkts_burst, nb_rx, ol_flags,
 			txp->tx_vlan_id, txp->tx_vlan_id_outer);
 	for (i = 0; i < nb_rx; i++) {
-		// if (likely(i < nb_rx - 1))
-		// 	rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[i+1],
-		// 			void *));
+		if (likely(i < nb_rx - 1))
+			rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[i+1],
+					void *));
 		mb = pkts_burst[i];
 		h.eth = rte_pktmbuf_mtod(mb, struct rte_ether_hdr *);
 		ether_header = rte_pktmbuf_mtod(mb, struct rte_ether_hdr *);
@@ -514,15 +514,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 		mbuf_field_set(mb, ol_flags);
 	}
 
-	//short-cut for single packet
-	if(nb_rx == 1 && nb_pkt_per_burst == 1 && drop_index == 0){
-		nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
-		goto timer;
-	}
-	else if(nb_rx == 1 && nb_pkt_per_burst == 1 && drop_index == 1){
-		rte_pktmbuf_free(pkts_burst[0]);
-		goto timer;
-	} 
+	//printf("--------\n");
 
 	// TODO: Handle packets don't need to be sent out
 	// Method 1:
@@ -591,7 +583,6 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 					&pkts_burst[nb_tx], nb_rx - nb_tx);
 		}
 	}
-timer:
 	fs->tx_packets += nb_tx;
 #ifdef RTE_TEST_PMD_RECORD_BURST_STATS
 	fs->tx_burst_stats.pkt_burst_spread[nb_tx]++;
