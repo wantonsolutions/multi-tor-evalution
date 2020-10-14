@@ -3,6 +3,8 @@
 # Copyright(c) 2010-2014 Intel Corporation
 
 HUGEPGSZ=`cat /proc/meminfo  | grep Hugepagesize | cut -d : -f 2 | tr -d ' '`
+cd $RTE_SDK
+echo $RTE_SDK
 
 #
 # Creates hugepage filesystem.
@@ -167,7 +169,10 @@ setup_icc()
 setup_target()
 {
 	export RTE_TARGET=x86_64-native-linuxapp-gcc
-	make install T=${RTE_TARGET}
+	# set CONFIG_RTE_EAL_IGB_UIO=y, so we can have igb_uio kernel module
+	echo "CONFIG_RTE_EAL_IGB_UIO=y" | tee -a $RTE_SDK/config/defconfig_$RTE_TARGET
+
+	make config install -j8 T=${RTE_TARGET} DESTDIR=$RTE_SDK MAKE_PAUSE=n
 
 	echo "------------------------------------------------------------------------------"
 	echo " RTE_TARGET exported as $RTE_TARGET"
