@@ -1508,7 +1508,7 @@ init_hashtable(void){
 	//printf("ether_addr size: %zu\n", sizeof(struct rte_ether_addr)); // 6 bytes!
 	char *ip_addr = (char*) malloc(20);
 	char *mac_addr = (char*) malloc(50);
-	FILE* fp = fopen("./ip_service_load.txt", "r");
+	FILE* fp = fopen("./ip_service_load_aws.txt", "r");
 	int service, load;
 	int num_entries;
 
@@ -1535,7 +1535,7 @@ init_hashtable(void){
 		//printf("lookup should find %" PRIu64 ", and it finds a value %" PRIu64 "\n", ip2load_values[i], *ptr);
 	}
 
-	fp = fopen("./ip_mac.txt", "r");
+	fp = fopen("./ip_mac_aws.txt", "r");
 	fscanf(fp, "%d\n", &num_entries);
 	printf("ip_mac: num_entries %d\n", num_entries);
 	for(int i = 0; i < num_entries; i++){
