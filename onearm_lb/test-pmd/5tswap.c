@@ -23,7 +23,7 @@
 
 //ST: for packet/request redirection
 #define REDIRECT_ENABLED 1
-//#define REDIRECT_DEBUG_PRINT 1
+#define REDIRECT_DEBUG_PRINT 1
 #include <rte_hash.h>
 #include <rte_fbk_hash.h>
 #include <rte_jhash.h>
@@ -314,7 +314,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 				printf("min index: %d\n", min_index);				
 				#endif
 				// swap the ip src_addr back because we're a switch! 				
-				ipv4_header->src_addr = ipv4_header->dst_addr; 
+				//ipv4_header->src_addr = ipv4_header->dst_addr; 
 				// Assign ip dst addr
 				if(min_index == 1){
 					ipv4_header->dst_addr = h.alt->alt_dst_ip;
@@ -350,6 +350,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 					#endif
 					// Assign lookup result to dest ether addr
 					// rte_ether_addr_copy (const struct rte_ether_addr *ea_from, struct rte_ether_addr *ea_to)
+					//rte_ether_addr_copy(&ether_header->d_addr, &ether_header->s_addr);
 					rte_ether_addr_copy(lookup1, &ether_header->d_addr);
 				}
 				else{
@@ -442,23 +443,25 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 				ipv4_header->src_addr = ipv4_header->dst_addr;
 				ipv4_header->dst_addr = h.alt->alt_dst_ip;
 
-				// uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_header->src_addr);				
-				// uint8_t src_addr[4];
-				// src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
-				// src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
-				// src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
-				// src_addr[3] = (uint8_t) src_ipaddr & 0xff;		
-				// printf("ipv4_header->src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
-				// 		src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+				#ifdef REDIRECT_DEBUG_PRINT
+				uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_header->src_addr);				
+				uint8_t src_addr[4];
+				src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
+				src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
+				src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
+				src_addr[3] = (uint8_t) src_ipaddr & 0xff;		
+				printf("ipv4_header->src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+				 		src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
 
-				// uint8_t temp_addrs[4];
-				// uint32_t temp_ipaddr = rte_be_to_cpu_32(ipv4_header->dst_addr);
-				// temp_addrs[0] = (uint8_t) (temp_ipaddr >> 24) & 0xff;
-				// temp_addrs[1] = (uint8_t) (temp_ipaddr >> 16) & 0xff;
-				// temp_addrs[2] = (uint8_t) (temp_ipaddr >> 8) & 0xff;
-				// temp_addrs[3] = (uint8_t) temp_ipaddr & 0xff;
-				// printf("ipv4_header->dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
-				// 		temp_addrs[0], temp_addrs[1], temp_addrs[2], temp_addrs[3]);
+				uint8_t temp_addrs[4];
+				uint32_t temp_ipaddr = rte_be_to_cpu_32(ipv4_header->dst_addr);
+				temp_addrs[0] = (uint8_t) (temp_ipaddr >> 24) & 0xff;
+				temp_addrs[1] = (uint8_t) (temp_ipaddr >> 16) & 0xff;
+				temp_addrs[2] = (uint8_t) (temp_ipaddr >> 8) & 0xff;
+				temp_addrs[3] = (uint8_t) temp_ipaddr & 0xff;
+				printf("ipv4_header->dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n",
+				 		temp_addrs[0], temp_addrs[1], temp_addrs[2], temp_addrs[3]);
+				#endif
 
 				int ret = rte_hash_lookup_data(fs->ip2mac_table, (void*) &ipv4_header->dst_addr, &lookup_result);
 				if(ret >= 0){
