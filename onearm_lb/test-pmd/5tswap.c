@@ -23,7 +23,7 @@
 
 //ST: for packet/request redirection
 #define REDIRECT_ENABLED 1
-#define REDIRECT_DEBUG_PRINT 1
+//#define REDIRECT_DEBUG_PRINT 1
 #include <rte_hash.h>
 #include <rte_fbk_hash.h>
 #include <rte_jhash.h>
@@ -312,9 +312,9 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 				int min_index = min_load(load1,load2,load3);
 				#ifdef REDIRECT_DEBUG_PRINT 
 				printf("min index: %d\n", min_index);				
-				#endif
-				// swap the ip src_addr back because we're a switch! 				
-				//ipv4_header->src_addr = ipv4_header->dst_addr; 
+				#endif 				
+				// after swap ipv4_header->dst_addr is the actual src
+				uint32_t actual_src  = ipv4_header->dst_addr; 
 				// Assign ip dst addr
 				if(min_index == 1){
 					ipv4_header->dst_addr = h.alt->alt_dst_ip;
@@ -325,6 +325,8 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 				else if(min_index == 3){
 					ipv4_header->dst_addr = h.alt->alt_dst_ip3;
 				}
+				// put the ip src_addr back to alt_dst_ip	
+				h.alt->alt_dst_ip = actual_src;
 
 				#ifdef REDIRECT_DEBUG_PRINT 
 				uint8_t temp_addrs[4];
@@ -369,7 +371,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 
 				// update checksum!
 				udp_header->dgram_cksum = 0;
-            	udp_header->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_header, (void*)udp_header);
+            			udp_header->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_header, (void*)udp_header);
 				ipv4_header->hdr_checksum = 0;
 				ipv4_header->hdr_checksum = rte_ipv4_cksum(ipv4_header);
 
@@ -439,9 +441,10 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 				// uint64_t recv_counter = (uint64_t) h.alt->feedback_options;
 				// printf("recv_counter: %" PRIu64 " from \n", recv_counter);
 
-				// swap the ip src_addr back because we're a switch! 				
-				ipv4_header->src_addr = ipv4_header->dst_addr;
+				// we don't swap the ip src_addr back because AWS doesn't like it		
+				uint32_t actaul_src = ipv4_header->dst_addr;
 				ipv4_header->dst_addr = h.alt->alt_dst_ip;
+				h.alt->alt_dst_ip = actaul_src;
 
 				#ifdef REDIRECT_DEBUG_PRINT
 				uint32_t src_ipaddr = rte_be_to_cpu_32(ipv4_header->src_addr);				
@@ -489,7 +492,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 
 				// update checksum!
 				udp_header->dgram_cksum = 0;
-            	udp_header->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_header, (void*)udp_header);
+            			udp_header->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_header, (void*)udp_header);
 				ipv4_header->hdr_checksum = 0;
 				ipv4_header->hdr_checksum = rte_ipv4_cksum(ipv4_header);
 				passthrough_counter++;
