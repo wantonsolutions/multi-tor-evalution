@@ -7,9 +7,6 @@
 
 #include <stdbool.h>
 
-//ST: include for clock_gettime()
-#include <time.h>
-
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
 #include <rte_gro.h>
@@ -132,11 +129,6 @@ struct fwd_stream {
 	uint64_t rx_bad_outer_l4_csum;
 	/**< received packets has bad outer l4 checksum */
 	unsigned int gro_times;	/**< GRO operation times */
-
-	//ST: use hash table to lookup load and mac addr for rediretion
-	struct rte_hash *ip2load_table; //
-	struct rte_hash *ip2mac_table;  // read-only after init
-	uint64_t* latency_records;
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	uint64_t     core_cycles; /**< used for RX and TX processing */
 #endif
@@ -145,7 +137,6 @@ struct fwd_stream {
 	struct pkt_burst_stats tx_burst_stats;
 #endif
 };
-
 
 /** Descriptor for a single flow. */
 struct port_flow {
@@ -257,8 +248,6 @@ extern struct fwd_engine csum_fwd_engine;
 extern struct fwd_engine icmp_echo_engine;
 extern struct fwd_engine noisy_vnf_engine;
 extern struct fwd_engine five_tuple_swap_fwd_engine;
-//ST: our rtt measurement engine!
-extern struct fwd_engine rtt_measure_fwd_engine;
 #ifdef RTE_LIBRTE_IEEE1588
 extern struct fwd_engine ieee1588_fwd_engine;
 #endif
@@ -317,8 +306,6 @@ extern int testpmd_logtype; /**< Log type for testpmd logs */
 extern uint8_t  interactive;
 extern uint8_t  auto_start;
 extern uint8_t  tx_first;
-extern uint8_t  info_exchange_enabled;
-extern uint8_t  rtt_measure_enabled;
 extern char cmdline_filename[PATH_MAX]; /**< offline commands file */
 extern uint8_t  numa_support; /**< set by "--numa" parameter */
 extern uint16_t port_topology; /**< set by "--port-topology" parameter */
@@ -718,8 +705,6 @@ void fwd_lcores_config_display(void);
 void pkt_fwd_config_display(struct fwd_config *cfg);
 void rxtx_config_display(void);
 void fwd_config_setup(void);
-void simple_fwd_config_setup(void);
-void rss_fwd_config_setup(void);
 void set_def_fwd_config(void);
 void reconfig(portid_t new_port_id, unsigned socket_id);
 int init_fwd_streams(void);

@@ -2121,10 +2121,6 @@ rxtx_config_display(void)
 				rx_conf[qid].rx_thresh.wthresh);
 			printf("      RX Offloads=0x%"PRIx64"\n",
 				rx_conf[qid].offloads);
-			printf("      RX drop_enable %"PRIu8"\n",
-				rx_qinfo.conf.rx_drop_en);
-			printf("      RX mempool name %s\n",
-				rx_qinfo.mp->name);
 		}
 
 		/* per tx queue config only for first queue to be less verbose */
@@ -2353,11 +2349,9 @@ fwd_topology_tx_port_get(portid_t rxp)
 	}
 }
 
-void
+static void
 simple_fwd_config_setup(void)
 {
-	printf("simple_fwd_config_setup\n");
-	cur_fwd_config.fwd_eng = cur_fwd_eng;
 	portid_t i;
 
 	cur_fwd_config.nb_fwd_ports = (portid_t) nb_fwd_ports;
@@ -2372,8 +2366,6 @@ simple_fwd_config_setup(void)
 	 * must be lower or equal to the number of forwarding ports.
 	 */
 	cur_fwd_config.nb_fwd_lcores = (lcoreid_t) nb_fwd_lcores;
-	printf("cur_fwd_config.nb_fwd_lcores:%" PRIu8 "\n", cur_fwd_config.nb_fwd_lcores);
-	printf("cur_fwd_config.nb_fwd_ports:%" PRIu8 "\n", cur_fwd_config.nb_fwd_ports);
 	if (cur_fwd_config.nb_fwd_lcores > cur_fwd_config.nb_fwd_ports)
 		cur_fwd_config.nb_fwd_lcores =
 			(lcoreid_t) cur_fwd_config.nb_fwd_ports;
@@ -2395,12 +2387,9 @@ simple_fwd_config_setup(void)
  * being composed of a RX queue to poll on a RX port for input messages,
  * associated with a TX queue of a TX port where to send forwarded packets.
  */
-void
+static void
 rss_fwd_config_setup(void)
 {
-	printf("rss_fwd_config_setup\n");
-	cur_fwd_config.fwd_eng = cur_fwd_eng;
-	
 	portid_t   rxp;
 	portid_t   txp;
 	queueid_t  rxq;
@@ -2418,9 +2407,6 @@ rss_fwd_config_setup(void)
 	if (cur_fwd_config.nb_fwd_streams < cur_fwd_config.nb_fwd_lcores)
 		cur_fwd_config.nb_fwd_lcores =
 			(lcoreid_t)cur_fwd_config.nb_fwd_streams;
-	
-	printf("cur_fwd_config.nb_fwd_lcores:%" PRIu8 "\n", cur_fwd_config.nb_fwd_lcores);
-	printf("cur_fwd_config.nb_fwd_streams:%" PRIu8 "\n", cur_fwd_config.nb_fwd_streams);
 
 	/* reinitialize forwarding streams */
 	init_fwd_streams();
@@ -2592,7 +2578,6 @@ icmp_echo_config_setup(void)
 void
 fwd_config_setup(void)
 {
-	printf("fwd_config_setup\n");
 	cur_fwd_config.fwd_eng = cur_fwd_eng;
 	if (strcmp(cur_fwd_eng->fwd_mode_name, "icmpecho") == 0) {
 		icmp_echo_config_setup();

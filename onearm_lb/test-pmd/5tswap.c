@@ -520,6 +520,7 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 		mbuf_field_set(mb, ol_flags);
 	}
 
+	#ifdef REDIRECT_ENABLED
 	//short-cut for single packet
 	if(nb_rx == 1 && nb_pkt_per_burst == 1 && drop_index == 0){
 		nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
@@ -578,13 +579,16 @@ pkt_burst_5tuple_swap(struct fwd_stream *fs)
 
 		drop_index = 0;
 	}
+	#endif //REDIRECT_ENABLED
 	
 	// Method 2:
 	// rte_eth_tx_buffer() per packet
 	// dpdk_flush if (++RTE_PER_LCORE(packet_count) == 32)
 
 	//old rte_eth_tx_burst
-	//nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
+	#ifndef REDIRECT_ENABLED
+	nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, nb_rx);
+	#endif
 
 	/*
 	 * Retry if necessary

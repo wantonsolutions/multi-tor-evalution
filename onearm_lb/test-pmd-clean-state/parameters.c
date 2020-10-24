@@ -142,9 +142,6 @@ usage(char* progname)
 	printf("  --enable-hw-vlan-extend: enable hardware vlan extend.\n");
 	printf("  --enable-hw-qinq-strip: enable hardware qinq strip.\n");
 	printf("  --enable-drop-en: enable per queue packet drop.\n");
-	//ST: help msg of enable-info-exchange
-	printf("  --enable-info-exchange: enable inter-switch to exchange information, e.g. load or queue depth\n");
-	printf("  --enable-rtt-measure: enable rtt meausurement in tx_only fwd mode\n");
 	printf("  --disable-rss: disable rss.\n");
 	printf("  --port-topology=<paired|chained|loop>: set port topology (paired "
 	       "is default).\n");
@@ -630,8 +627,6 @@ launch_args_parse(int argc, char** argv)
 		{ "enable-hw-vlan-extend",      0, 0, 0 },
 		{ "enable-hw-qinq-strip",       0, 0, 0 },
 		{ "enable-drop-en",            0, 0, 0 },
-		{ "enable-info-exchange",      0, 0, 0}, // ST: put our options here
-		{ "enable-rtt-measure",        0, 0, 0},
 		{ "disable-rss",                0, 0, 0 },
 		{ "port-topology",              1, 0, 0 },
 		{ "forward-mode",               1, 0, 0 },
@@ -1036,14 +1031,6 @@ launch_args_parse(int argc, char** argv)
 			if (!strcmp(lgopts[opt_idx].name, "enable-drop-en"))
 				rx_drop_en = 1;
 
-			//ST: our own option: info_exchange_enabled
-			if (!strcmp(lgopts[opt_idx].name, "enable-info-exchange"))
-				info_exchange_enabled = 1;
-
-			//ST: our own option: rtt_measure_enabled
-			if (!strcmp(lgopts[opt_idx].name, "enable-rtt-measure"))
-				rtt_measure_enabled = 1;
-
 			if (!strcmp(lgopts[opt_idx].name, "disable-rss"))
 				rss_hf = 0;
 			if (!strcmp(lgopts[opt_idx].name, "port-topology")) {
@@ -1058,11 +1045,8 @@ launch_args_parse(int argc, char** argv)
 						 " must be: paired, chained or loop\n",
 						 optarg);
 			}
-			if (!strcmp(lgopts[opt_idx].name, "forward-mode")){
-				//ST: we set forward-mode here!
-				printf("forward-mode option %s\n", optarg);
+			if (!strcmp(lgopts[opt_idx].name, "forward-mode"))
 				set_pkt_forwarding_mode(optarg);
-			}
 			if (!strcmp(lgopts[opt_idx].name, "rss-ip"))
 				rss_hf = ETH_RSS_IP;
 			if (!strcmp(lgopts[opt_idx].name, "rss-udp"))
