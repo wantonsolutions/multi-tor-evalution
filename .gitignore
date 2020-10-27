@@ -11,3 +11,9 @@ onearm_lb/test-pmd/*.o*
 onearm_lb/test-pmd/*.cmd
 onearm_lb/test-pmd/*.map
 onearm_lb/log/
+onearm_lb/test-pmd-clean-state/build
+onearm_lb/test-pmd-clean-state/*install
+onearm_lb/test-pmd-clean-state/*build
+onearm_lb/test-pmd-clean-state/*.o*
+onearm_lb/test-pmd-clean-state/*.cmd
+onearm_lb/test-pmd-clean-state/*.map

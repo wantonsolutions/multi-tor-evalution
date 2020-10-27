@@ -10,8 +10,9 @@
 #
 # Change to DPDK directory ( <this-script's-dir>/.. ), and export it as RTE_SDK
 #
-cd ./dpdk_deps/dpdk-19.11.3
-export RTE_SDK=/home/shw328/multi-tor-evalution/dpdk_deps/dpdk-19.11.3
+#cd ./dpdk_deps/dpdk-19.11.3
+#export RTE_SDK=/home/shw328/multi-tor-evalution/dpdk_deps/dpdk-19.11.3
+cd $RTE_SDK
 echo "------------------------------------------------------------------------------"
 echo " RTE_SDK exported as $RTE_SDK"
 echo "------------------------------------------------------------------------------"
@@ -88,7 +89,13 @@ set_numa_pages()
 setup_target()
 {
 	export RTE_TARGET=x86_64-native-linuxapp-gcc
-	make install T=${RTE_TARGET}
+	#CONFIG_RTE_LIBRTE_MLX5_PMD=y
+	#CONFIG_RTE_LIBRTE_MLX5_DEBUG=n
+	echo "CONFIG_RTE_LIBRTE_MLX5_PMD=y" | tee -a $RTE_SDK/config/defconfig_$RTE_TARGET
+	echo "CONFIG_RTE_LIBRTE_MLX5_DEBUG=y" | tee -a $RTE_SDK/config/defconfig_$RTE_TARGET	
+	echo "CONFIG_RTE_LIBRTE_ETHDEV_DEBUG=y" | tee -a $RTE_SDK/config/defconfig_$RTE_TARGET
+
+    make config install -j8 T=${RTE_TARGET} DESTDIR=$RTE_SDK MAKE_PAUSE=n
 
 	echo "------------------------------------------------------------------------------"
 	echo " RTE_TARGET exported as $RTE_TARGET"

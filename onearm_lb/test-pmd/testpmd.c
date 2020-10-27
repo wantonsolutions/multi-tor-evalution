@@ -99,6 +99,7 @@
  */
 //#define REDIRECT_DEBUG_PRINT 1
 //#define REDIRECT_HASHTABLE_TEST 1
+//#define AWS_HASHTABLE
 #define HASH_RETURN_IF_ERROR(handle, cond, str, ...) do {                \
     if (cond) {                         \
         printf("ERROR line %d: " str "\n", __LINE__, ##__VA_ARGS__); \
@@ -108,6 +109,7 @@
 } while(0)
 
 #define TOTAL_ENTRY 128
+
 
 static struct rte_hash_parameters ip2mac_params = {
 	.name = "ip2mac",
@@ -139,6 +141,10 @@ struct rte_hash* ip2mac_table;
 //ST: use rte_eth_dev_tx_buffer to deal with per-packet send/drop
 //TODO: see 5tswap.c for more detail
 //RTE_DECLARE_PER_LCORE(struct rte_eth_dev_tx_buffer *, tx_buf);
+
+//ST: define info_exchange_enabled and rtt_measure_enabled here
+uint8_t info_exchange_enabled = 0;
+uint8_t rtt_measure_enabled = 0;
 
 uint16_t verbose_level = 0; /**< Silent by default. */
 int testpmd_logtype; /**< Log type for testpmd logs */
@@ -1508,7 +1514,11 @@ init_hashtable(void){
 	//printf("ether_addr size: %zu\n", sizeof(struct rte_ether_addr)); // 6 bytes!
 	char *ip_addr = (char*) malloc(20);
 	char *mac_addr = (char*) malloc(50);
+	#ifndef AWS_HASHTABLE
+	FILE* fp = fopen("./ip_service_load_local.txt", "r");
+	#else
 	FILE* fp = fopen("./ip_service_load_aws.txt", "r");
+	#endif
 	int service, load;
 	int num_entries;
 
@@ -1535,7 +1545,11 @@ init_hashtable(void){
 		//printf("lookup should find %" PRIu64 ", and it finds a value %" PRIu64 "\n", ip2load_values[i], *ptr);
 	}
 
+	#ifndef AWS_HASHTABLE
+	fp = fopen("./ip_mac_local.txt", "r");
+	#else
 	fp = fopen("./ip_mac_aws.txt", "r");
+	#endif
 	fscanf(fp, "%d\n", &num_entries);
 	printf("ip_mac: num_entries %d\n", num_entries);
 	for(int i = 0; i < num_entries; i++){
@@ -3958,6 +3972,7 @@ main(int argc, char** argv)
 	if (testpmd_logtype < 0)
 		rte_exit(EXIT_FAILURE, "Cannot register log type");
 	rte_log_set_level(testpmd_logtype, RTE_LOG_DEBUG);
+	//rte_log_set_level_pattern("pmd.net.mlx5", RTE_LOG_DEBUG);
 
 	diag = rte_eal_init(argc, argv);
 	if (diag < 0)

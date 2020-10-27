@@ -413,18 +413,13 @@ pkt_burst_transmit(struct fwd_stream *fs)
 		printf("rte_eth_rx_burst rx %" PRIu16 " pkt\n", nb_rx);
 	}
 
+	fs->rx_packets += nb_rx;
+	for (int i = 0; i < nb_rx; i++)
+		rte_pktmbuf_free(recv_burst[i]);
+
 	// struct rte_eth_burst_mode mode;
 	// rte_eth_rx_burst_mode_get(fs->rx_port, fs->rx_queue, &mode);
 	// printf("%s\n", mode.info); // Vector SSE!
-
-	/*int ret_count = rte_eth_rx_queue_count(fs->rx_port, fs->rx_queue);
-	if(ret_count > 0){
-		printf("port %" PRIu16 ", queue %" PRIu16 ", queue_count: %d\n", 
-		fs->rx_port, fs->rx_queue, ret_count);
-	}
-	if (ret_count == -ENOTSUP){
-		printf("the device does not support this function\n");
-	}*/
 
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	end_tsc = rte_rdtsc();
