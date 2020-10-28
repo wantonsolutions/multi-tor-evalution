@@ -40,18 +40,32 @@
 
 #include "testpmd.h"
 
+struct req_header {
+	uint64_t request_id;    // Request identifier
+} __attribute__((__packed__)); // or use __rte_packed
+
+#define TS_ARRAY_SIZE 10240
+struct timestamp_pair{
+	struct timespec	tx_timestamp;
+	struct timespec	rx_timestamp;
+};
+struct timestamp_pair ts_array[TS_ARRAY_SIZE];
+uint64_t recv_req_index;
+
+struct req_header pkt_req_hdr;
+
 uint16_t tx_udp_src_port = 7000;
 uint16_t tx_udp_dst_port = 7000;
 
-uint32_t tx_ip_src_addr = RTE_IPV4(172, 31, 32, 235);
-uint32_t tx_ip_dst_addr = RTE_IPV4(172, 31, 34, 51);
-char* mac_src_addr = "06:97:39:b3:67:3f"; //172.31.32.235 06:97:39:b3:67:3f
-char* mac_dst_addr = "06:96:c2:b8:68:09"; //172.31.34.51  06:96:c2:b8:68:09 
+//uint32_t tx_ip_src_addr = RTE_IPV4(172, 31, 32, 235);
+//uint32_t tx_ip_dst_addr = RTE_IPV4(172, 31, 34, 51);
+//char* mac_src_addr = "06:97:39:b3:67:3f"; //172.31.32.235 06:97:39:b3:67:3f
+//char* mac_dst_addr = "06:96:c2:b8:68:09"; //172.31.34.51  06:96:c2:b8:68:09 
 
-//uint32_t tx_ip_src_addr = RTE_IPV4(10, 0, 0, 18);
-//uint32_t tx_ip_dst_addr = RTE_IPV4(10 ,0, 0, 4);
-//char* mac_src_addr = "ec:0d:9a:68:21:c0"; //10.0.0.18 -> ec:0d:9a:68:21:c0
-//char* mac_dst_addr = "ec:0d:9a:68:21:a8"; //10.0.0.4  -> ec:0d:9a:68:21:a8
+uint32_t tx_ip_src_addr = RTE_IPV4(10, 0, 0, 18);
+uint32_t tx_ip_dst_addr = RTE_IPV4(10 ,0, 0, 4);
+char* mac_src_addr = "ec:0d:9a:68:21:c0"; //10.0.0.18 -> ec:0d:9a:68:21:c0
+char* mac_dst_addr = "ec:0d:9a:68:21:a8"; //10.0.0.4  -> ec:0d:9a:68:21:a8
 struct rte_ether_hdr eth_hdr;
 
 #define IP_DEFTTL  64   /* from RFC 1340. */
@@ -143,8 +157,9 @@ setup_pkt_udp_ip_headers(struct rte_ipv4_hdr *ip_hdr,
 
 	/*
 	 * Initialize UDP header.
-	 */
+	 */	
 	pkt_len = (uint16_t) (pkt_data_len + sizeof(struct rte_udp_hdr));
+	printf("udp pkt_len:%" PRIu16 "\n", pkt_len);
 	udp_hdr->src_port = rte_cpu_to_be_16(tx_udp_src_port);
 	udp_hdr->dst_port = rte_cpu_to_be_16(tx_udp_dst_port);
 	udp_hdr->dgram_len      = RTE_CPU_TO_BE_16(pkt_len);
@@ -152,8 +167,9 @@ setup_pkt_udp_ip_headers(struct rte_ipv4_hdr *ip_hdr,
 
 	/*
 	 * Initialize IP header.
-	 */
+	 */	
 	pkt_len = (uint16_t) (pkt_len + sizeof(struct rte_ipv4_hdr));
+	printf("ip pkt_len:%" PRIu16 "\n", pkt_len);
 	ip_hdr->version_ihl   = RTE_IPV4_VHL_DEF;
 	ip_hdr->type_of_service   = 0;
 	ip_hdr->fragment_offset = 0;
@@ -255,6 +271,13 @@ pkt_burst_prepare(struct rte_mbuf *pkt, struct rte_mempool *mbp,
 	copy_buf_to_pkt(&pkt_udp_hdr, sizeof(pkt_udp_hdr), pkt,
 			sizeof(struct rte_ether_hdr) +
 			sizeof(struct rte_ipv4_hdr));
+	
+	pkt_req_hdr.request_id = (pkt_req_hdr.request_id + 1)%TS_ARRAY_SIZE;	
+	copy_buf_to_pkt(&pkt_req_hdr, sizeof(pkt_req_hdr), pkt,
+			sizeof(struct rte_ether_hdr) +
+			sizeof(struct rte_ipv4_hdr)  +
+			sizeof(struct rte_udp_hdr));
+
 	// if (unlikely(timestamp_enable)) {
 	// 	uint64_t skew = RTE_PER_LCORE(timestamp_qskew);
 	// 	struct {
@@ -396,6 +419,7 @@ pkt_burst_transmit(struct fwd_stream *fs)
 		return;
 	
 	clock_gettime(CLOCK_REALTIME, &ts1);
+	ts_array[pkt_req_hdr.request_id].tx_timestamp = ts1;
 	nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst, 1);
 
 	/*
@@ -432,35 +456,56 @@ pkt_burst_transmit(struct fwd_stream *fs)
 
 	// 1 (X) 2 (X) 3 (X) 4 (V) for vector sse -> mlx5_rx_burst_vec
 	// 1 (V) for scalar -> mlx5_rx_burst
-	int nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, recv_burst, 1); 
+	int nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, recv_burst, 4); 
 	/*if(nb_rx > 0){
 		printf("rte_eth_rx_burst rx %" PRIu16 " pkt\n", nb_rx);
-	}*/
+	}*/	
 	clock_gettime(CLOCK_REALTIME, &ts2);
 
-	if(ts1.tv_sec == ts2.tv_sec){
-		//fprintf(fp, "%" PRIu64 "\n", ts2.tv_nsec - ts1.tv_nsec);
-		printf("%" PRIu64 "\n", ts2.tv_nsec - ts1.tv_nsec);
-	}
-	else{
-		uint64_t ts1_nsec = ts1.tv_nsec + 1000000000*ts1.tv_sec;
-		uint64_t ts2_nsec = ts2.tv_nsec + 1000000000*ts2.tv_sec;
-		//fprintf(fp, "%" PRIu64 "\n", ts2_nsec - ts1_nsec);
-		printf("%" PRIu64 "\n", ts2_nsec - ts1_nsec);
-		//printf("queue_id %" PRIu16 ":%" PRIu64 "\n", fs->rx_queue, ts2_nsec - ts1_nsec);
+	fs->rx_packets += nb_rx;
+	for (int i = 0; i < nb_rx; i++){
+		struct req_header* recv_req_ptr = rte_pktmbuf_mtod_offset(recv_burst[i], struct req_header *, 
+			sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr));
+		uint64_t req_id = recv_req_ptr->request_id;	
+		req_id = req_id%TS_ARRAY_SIZE;
+		ts_array[req_id].rx_timestamp = ts2;		
+	
+		if(ts1.tv_sec == ts2.tv_sec){
+			//fprintf(fp, "%" PRIu64 "\n", ts2.tv_nsec - ts1.tv_nsec);
+			printf("%" PRIu64 "\n", ts_array[req_id].rx_timestamp.tv_nsec - ts_array[req_id].tx_timestamp.tv_nsec);
+		}
+		else{
+			uint64_t ts1_nsec = ts_array[req_id].tx_timestamp.tv_nsec + 1000000000*ts_array[req_id].tx_timestamp.tv_sec;
+			uint64_t ts2_nsec = ts_array[req_id].rx_timestamp.tv_nsec + 1000000000*ts_array[req_id].rx_timestamp.tv_sec;
+			//fprintf(fp, "%" PRIu64 "\n", ts2_nsec - ts1_nsec);
+			printf("%" PRIu64 "\n", ts2_nsec - ts1_nsec);
+			//printf("queue_id %" PRIu16 ":%" PRIu64 "\n", fs->rx_queue, ts2_nsec - ts1_nsec);
+		}
+		rte_pktmbuf_free(recv_burst[i]);
 	}
 
-	fs->rx_packets += nb_rx;
-	for (int i = 0; i < nb_rx; i++)
-		rte_pktmbuf_free(recv_burst[i]);
+	// if(likely(nb_rx > 0)){
+	// 	clock_gettime(CLOCK_REALTIME, &ts2);	
+	// 	if(ts1.tv_sec == ts2.tv_sec){
+	// 		//fprintf(fp, "%" PRIu64 "\n", ts2.tv_nsec - ts1.tv_nsec);
+	// 		printf("%" PRIu64 "\n", ts2.tv_nsec - ts1.tv_nsec);
+	// 	}
+	// 	else{
+	// 		uint64_t ts1_nsec = ts1.tv_nsec + 1000000000*ts1.tv_sec;
+	// 		uint64_t ts2_nsec = ts2.tv_nsec + 1000000000*ts2.tv_sec;
+	// 		//fprintf(fp, "%" PRIu64 "\n", ts2_nsec - ts1_nsec);
+	// 		printf("%" PRIu64 "\n", ts2_nsec - ts1_nsec);
+	// 		//printf("queue_id %" PRIu16 ":%" PRIu64 "\n", fs->rx_queue, ts2_nsec - ts1_nsec);
+	// 	}
+	// }
 
 	// struct rte_eth_burst_mode mode;
 	// rte_eth_rx_burst_mode_get(fs->rx_port, fs->rx_queue, &mode);
 	// printf("%s\n", mode.info); // Vector SSE!
 	
-	clock_gettime(CLOCK_REALTIME, &ts3);
-	sleep_ts1=ts3;
-	realnanosleep(100*1000, &sleep_ts1, &sleep_ts2); // 500 us
+	//clock_gettime(CLOCK_REALTIME, &ts3);
+	//sleep_ts1=ts3;
+	//realnanosleep(100*1000, &sleep_ts1, &sleep_ts2); // 500 us
 
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	end_tsc = rte_rdtsc();
@@ -489,6 +534,9 @@ tx_only_begin(portid_t pi)
 	rte_ether_unformat_addr(mac_dst_addr, &eth_hdr.d_addr);
 	print_ether_addr("ETH_DST_ADDR:", &eth_hdr.d_addr);
 	eth_hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
+
+	printf("pkt_data_len:%" PRIu16 "\n", pkt_data_len);
+	pkt_req_hdr.request_id = 0;
 
 	// timestamp_enable = false;
 	// timestamp_mask = 0;

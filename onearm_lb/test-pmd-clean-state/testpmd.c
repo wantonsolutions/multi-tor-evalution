@@ -3669,8 +3669,8 @@ main(int argc, char** argv)
 	if (testpmd_logtype < 0)
 		rte_exit(EXIT_FAILURE, "Cannot register log type");
 	rte_log_set_level(testpmd_logtype, RTE_LOG_DEBUG);
-	rte_log_set_level_pattern("pmd.net.mlx5", RTE_LOG_DEBUG);
-	rte_log_set_global_level(RTE_LOG_DEBUG);
+	//rte_log_set_level_pattern("pmd.net.mlx5", RTE_LOG_DEBUG);
+	//rte_log_set_global_level(RTE_LOG_DEBUG);
 
 	diag = rte_eal_init(argc, argv);
 	if (diag < 0)
