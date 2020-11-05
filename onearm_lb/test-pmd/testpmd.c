@@ -99,7 +99,7 @@
  */
 //#define REDIRECT_DEBUG_PRINT 1
 //#define REDIRECT_HASHTABLE_TEST 1
-//#define AWS_HASHTABLE
+//#define AWS_HASHTABLE 1
 #define HASH_RETURN_IF_ERROR(handle, cond, str, ...) do {                \
     if (cond) {                         \
         printf("ERROR line %d: " str "\n", __LINE__, ##__VA_ARGS__); \
@@ -142,9 +142,9 @@ struct rte_hash* ip2mac_table;
 //TODO: see 5tswap.c for more detail
 //RTE_DECLARE_PER_LCORE(struct rte_eth_dev_tx_buffer *, tx_buf);
 
-//ST: define info_exchange_enabled and rtt_measure_enabled here
+//ST: define info_exchange_enabled and replica_selection_enabled here
 uint8_t info_exchange_enabled = 0;
-uint8_t rtt_measure_enabled = 0;
+uint8_t replica_selection_enabled = 0;
 
 uint16_t verbose_level = 0; /**< Silent by default. */
 int testpmd_logtype; /**< Log type for testpmd logs */
@@ -246,6 +246,7 @@ struct fwd_engine * fwd_engines[] = {
 	&icmp_echo_engine,
 	&noisy_vnf_engine,
 	&five_tuple_swap_fwd_engine,
+	&replica_selection_fwd_engine,
 #ifdef RTE_LIBRTE_IEEE1588
 	&ieee1588_fwd_engine,
 #endif
@@ -526,6 +527,14 @@ struct rte_fdir_conf fdir_conf = {
 	.drop_queue = 127,
 };
 
+uint8_t sym_hash_key[RSS_HASH_KEY_LENGTH] = {
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+        0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A, 0x6D, 0x5A,
+};
+
 volatile int test_done = 1; /* stop packet forwarding when set to 1. */
 
 struct queue_stats_mappings tx_queue_stats_mappings_array[MAX_TX_QUEUE_STATS_MAPPINGS];
@@ -629,9 +638,11 @@ set_default_fwd_lcores_config(void)
 			continue;
 		fwd_lcores_cpuids[nb_lc++] = i;
 	}
+	printf("nb_lc:%u\n",nb_lc);
 	nb_lcores = (lcoreid_t) nb_lc;
 	nb_cfg_lcores = nb_lcores;
 	//nb_fwd_lcores = 1;
+	//ST: Note nb_fwd_lcores was hard-coded here!
 	nb_fwd_lcores = 2;
 }
 
@@ -2435,6 +2446,18 @@ start_pkt_forward_on_core(void *fwd_arg)
 }
 
 /*
+ * ST: run our rtt meausrement code on cores
+ */
+static int
+run_txonly_on_core(void *fwd_arg)
+{
+	printf("run_txonly_on_core\n");
+	run_pkt_fwd_on_lcore((struct fwd_lcore *) fwd_arg, 
+					tx_only_engine.packet_fwd);
+	return 0;
+}
+
+/*
  * Run the TXONLY packet forwarding engine to send a single burst of packets.
  * Used to start communication flows in network loopback test configurations.
  */
@@ -2450,6 +2473,54 @@ start_pkt_forward_on_core(void *fwd_arg)
 // 	run_pkt_fwd_on_lcore(&tmp_lcore, tx_only_engine.packet_fwd);
 // 	return 0;
 // }
+
+static void
+launch_info_exchange_and_forwarding(lcore_function_t *pkt_fwd_on_lcore, 
+	lcore_function_t *info_exchange_on_lcore){
+
+	port_fwd_begin_t port_fwd_begin;
+	unsigned int i;
+	unsigned int lc_id;
+	int diag;
+	
+	// in tx_only_engine.port_fwd_begin there's no actual port specfic 
+	// operation involved and we may use pi to pass service_id into txonly?
+	port_fwd_begin = tx_only_engine.port_fwd_begin;
+	// port_fwd_begin = cur_fwd_config.fwd_eng->port_fwd_begin;	
+	if (port_fwd_begin != NULL) {
+		printf("port_fwd_begin != NULL\n");
+		for (i = 0; i < cur_fwd_config.nb_fwd_ports; i++)
+			(*port_fwd_begin)(fwd_ports_ids[i]);
+	}
+	nb_pkt_per_burst = 4;
+	
+	//TODO: info_exchange_enabled
+	// 0 to cur_fwd_config.nb_fwd_lcores-2 th cores do forwarding
+	// cur_fwd_config.nb_fwd_lcores th core do information exchange  
+
+	lc_id = fwd_lcores_cpuids[0];
+	if ((interactive == 0) || (lc_id != rte_lcore_id())) {
+		fwd_lcores[0]->stopped = 0;
+		diag = rte_eal_remote_launch(info_exchange_on_lcore,
+							fwd_lcores[0], lc_id);
+		if (diag != 0)
+			printf("launch info_exchange on lcore %u failed - diag=%d\n",
+					lc_id, diag);
+	}
+
+	for (i = 1; i < cur_fwd_config.nb_fwd_lcores; i++) {
+		lc_id = fwd_lcores_cpuids[i];
+		if ((interactive == 0) || (lc_id != rte_lcore_id())) {
+			fwd_lcores[i]->stopped = 0;
+			diag = rte_eal_remote_launch(pkt_fwd_on_lcore,
+						     fwd_lcores[i], lc_id);
+			if (diag != 0)
+				printf("launch lcore %u failed - diag=%d\n",
+				       lc_id, diag);
+		}
+	}
+
+}
 
 /*
  * Launch packet forwarding:
@@ -2529,7 +2600,10 @@ start_packet_forwarding(int with_tx_first)
 		map_port_queue_stats_mapping_registers(pt_id, port);
 	}
 
-	launch_packet_forwarding(start_pkt_forward_on_core);
+	if(info_exchange_enabled)
+		launch_info_exchange_and_forwarding(start_pkt_forward_on_core, run_txonly_on_core);
+	else
+		launch_packet_forwarding(start_pkt_forward_on_core);
 }
 
 void
@@ -3645,7 +3719,9 @@ init_port_config(void)
 			return;
 
 		if (nb_rxq > 1) {
-			port->dev_conf.rx_adv_conf.rss_conf.rss_key = NULL;
+			//ST: sym_hash_key for RSS
+			port->dev_conf.rx_adv_conf.rss_conf.rss_key = sym_hash_key;
+			port->dev_conf.rx_adv_conf.rss_conf.rss_key_len = RSS_HASH_KEY_LENGTH;
 			//printf("rss_hf: %" PRIu64 "\n", rss_hf);
 			port->dev_conf.rx_adv_conf.rss_conf.rss_hf =
 				rss_hf & port->dev_info.flow_type_rss_offloads;

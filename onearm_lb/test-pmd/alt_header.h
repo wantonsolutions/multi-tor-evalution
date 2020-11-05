@@ -13,14 +13,15 @@ struct table_key {
     uint16_t service_id;	
 } __attribute__((__packed__));
 
-// total 24 bytes
+// total 24 bytes + 80 bytes = 104 bytes
 struct alt_header {
   // 1 + 1 + 2 + 4 = 8 bytes
   uint8_t  msgtype_flags;
   uint8_t  redirection;
-  uint8_t  header_size;  	 	
+  uint8_t  header_size; // how long the whole header is, HOST_PER_RACK is not a fixed value
   uint8_t  reserved;
 
+  //4 bytes
   uint16_t feedback_options;	
   uint16_t service_id;    // Type of Service.
   uint32_t request_id;    // Request identifier.
@@ -29,6 +30,11 @@ struct alt_header {
   uint32_t alt_dst_ip;
   uint32_t alt_dst_ip2;
   uint32_t alt_dst_ip3;
+
+  //load information appended here!
+  uint16_t service_id_list[HOST_PER_RACK];   // 20 bytes
+  uint32_t host_ip_list[HOST_PER_RACK];     // 40 bytes
+  uint16_t host_queue_depth[HOST_PER_RACK]; // 20 bytes
 } __attribute__((__packed__)); // or use __rte_packed
 //typedef struct alt_header alt_header;
 

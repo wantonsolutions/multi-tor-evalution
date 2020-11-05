@@ -30,7 +30,10 @@
  * It is used to allocate the memory for hash key.
  * The hash key size is NIC dependent.
  */
-#define RSS_HASH_KEY_LENGTH 64
+/* RSS hash key size for MLX5 is defined in mlx5_prm.h:18
+#define MLX5_RSS_HASH_KEY_LEN 40
+*/
+#define RSS_HASH_KEY_LENGTH 40
 
 /*
  * Default size of the mbuf data buffer to receive standard 1518-byte
@@ -257,8 +260,8 @@ extern struct fwd_engine csum_fwd_engine;
 extern struct fwd_engine icmp_echo_engine;
 extern struct fwd_engine noisy_vnf_engine;
 extern struct fwd_engine five_tuple_swap_fwd_engine;
-//ST: our rtt measurement engine!
-extern struct fwd_engine rtt_measure_fwd_engine;
+//ST: our replica selection engine!
+extern struct fwd_engine replica_selection_fwd_engine;
 #ifdef RTE_LIBRTE_IEEE1588
 extern struct fwd_engine ieee1588_fwd_engine;
 #endif
@@ -318,7 +321,7 @@ extern uint8_t  interactive;
 extern uint8_t  auto_start;
 extern uint8_t  tx_first;
 extern uint8_t  info_exchange_enabled;
-extern uint8_t  rtt_measure_enabled;
+extern uint8_t  replica_selection_enabled;
 extern char cmdline_filename[PATH_MAX]; /**< offline commands file */
 extern uint8_t  numa_support; /**< set by "--numa" parameter */
 extern uint16_t port_topology; /**< set by "--port-topology" parameter */
@@ -430,7 +433,7 @@ extern struct rte_fdir_conf fdir_conf;
 /*
  * Configuration of packet segments used by the "txonly" processing engine.
  */
-#define TXONLY_DEF_PACKET_LEN 64
+#define TXONLY_DEF_PACKET_LEN 256
 extern uint16_t tx_pkt_length; /**< Length of TXONLY packet */
 extern uint16_t tx_pkt_seg_lengths[RTE_MAX_SEGS_PER_PKT]; /**< Seg. lengths */
 extern uint8_t  tx_pkt_nb_segs; /**< Number of segments in TX packets */

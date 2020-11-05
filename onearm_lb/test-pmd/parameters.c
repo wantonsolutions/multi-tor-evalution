@@ -829,6 +829,7 @@ launch_args_parse(int argc, char** argv)
 			}
 			if (!strcmp(lgopts[opt_idx].name, "nb-cores")) {
 				n = atoi(optarg);
+				printf("nb_lcores:%" PRIu8 "\n", nb_lcores);
 				if (n > 0 && n <= nb_lcores)
 					nb_fwd_lcores = (uint8_t) n;
 				else
@@ -1041,8 +1042,8 @@ launch_args_parse(int argc, char** argv)
 				info_exchange_enabled = 1;
 
 			//ST: our own option: rtt_measure_enabled
-			if (!strcmp(lgopts[opt_idx].name, "enable-rtt-measure"))
-				rtt_measure_enabled = 1;
+			if (!strcmp(lgopts[opt_idx].name, "enable-replica-selection"))
+				replica_selection_enabled = 1;
 
 			if (!strcmp(lgopts[opt_idx].name, "disable-rss"))
 				rss_hf = 0;

@@ -2446,6 +2446,59 @@ rss_fwd_config_setup(void)
 	}
 }
 
+//ST: using one core for info exchange?
+void
+replica_selection_fwd_config_setup(void)
+{
+	printf("rss_fwd_config_setup\n");
+	cur_fwd_config.fwd_eng = cur_fwd_eng;
+	
+	portid_t   rxp;
+	portid_t   txp;
+	queueid_t  rxq;
+	queueid_t  nb_q;
+	streamid_t  sm_id;
+
+	nb_q = nb_rxq;
+	if (nb_q > nb_txq)
+		nb_q = nb_txq;
+	cur_fwd_config.nb_fwd_lcores = (lcoreid_t) nb_fwd_lcores;
+	cur_fwd_config.nb_fwd_ports = nb_fwd_ports;
+	// the last queue will be used for tx-only!
+	cur_fwd_config.nb_fwd_streams = (streamid_t) (nb_q* cur_fwd_config.nb_fwd_ports);
+
+	if (cur_fwd_config.nb_fwd_streams < cur_fwd_config.nb_fwd_lcores)
+		cur_fwd_config.nb_fwd_lcores =
+			(lcoreid_t)cur_fwd_config.nb_fwd_streams;
+	
+	// nb_fwd_lcores ==  nb_fwd_streams
+	printf("cur_fwd_config.nb_fwd_lcores:%" PRIu8 "\n", cur_fwd_config.nb_fwd_lcores);
+	printf("cur_fwd_config.nb_fwd_streams:%" PRIu8 "\n", cur_fwd_config.nb_fwd_streams);
+
+	/* reinitialize forwarding streams */
+	init_fwd_streams();
+
+	setup_fwd_config_of_each_lcore(&cur_fwd_config);
+	rxp = 0; rxq = 0;
+	for (sm_id = 0; sm_id < cur_fwd_config.nb_fwd_streams; sm_id++) {
+		struct fwd_stream *fs;
+
+		fs = fwd_streams[sm_id];
+		txp = fwd_topology_tx_port_get(rxp);
+		fs->rx_port = fwd_ports_ids[rxp];
+		fs->rx_queue = rxq;
+		fs->tx_port = fwd_ports_ids[txp];
+		fs->tx_queue = rxq;
+		fs->peer_addr = fs->tx_port;
+		fs->retry_enabled = retry_enabled;
+		rxp++;
+		if (rxp < nb_fwd_ports)
+			continue;
+		rxp = 0;
+		rxq++;
+	}
+}
+
 /**
  * For the DCB forwarding test, each core is assigned on each traffic class.
  *
