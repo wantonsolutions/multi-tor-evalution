@@ -5,7 +5,10 @@
 
 #define FIRST_FLAG 0x20
 #define LAST_FLAG 0x10
-#define HOST_PER_RACK 10
+#define HOST_PER_RACK 2
+#define NUM_REPLICA 3
+#define LOAD_THRESHOLD 1 // 30 requests threshold
+#define REDIRECT_BOUND 2  // how many times a request can be redirected
 
 //value -> uint16_t load_level but store with uint64_t format
 struct table_key {
@@ -13,7 +16,7 @@ struct table_key {
     uint16_t service_id;	
 } __attribute__((__packed__));
 
-// total 24 bytes + 80 bytes = 104 bytes
+// total 28 bytes + 80 bytes = 108 bytes
 struct alt_header {
   // 1 + 1 + 2 + 4 = 8 bytes
   uint8_t  msgtype_flags;
@@ -26,10 +29,13 @@ struct alt_header {
   uint16_t service_id;    // Type of Service.
   uint32_t request_id;    // Request identifier.
   
-  // 12 bytes
-  uint32_t alt_dst_ip;
-  uint32_t alt_dst_ip2;
-  uint32_t alt_dst_ip3;
+  // 8 bytes + 12 bytes = 20 bytes
+  uint32_t alt_dst_ip; // default destination
+  uint32_t actual_src_ip;
+  uint32_t replica_dst_list[NUM_REPLICA];
+  // stay here for testing older version!
+  //uint32_t alt_dst_ip2;
+  //uint32_t alt_dst_ip3;  
 
   //load information appended here!
   uint16_t service_id_list[HOST_PER_RACK];   // 20 bytes
@@ -52,7 +58,8 @@ struct switch_exchange {
 // -> bit 4-7: msg_type listed in the enum below
 
 enum {
-  SINGLE_PKT_REQ = 0,
+  SINGLE_PKT_REQ = 0, // default is doing replica selection
+  SINGLE_PKT_REQ_PASSTHROUGH,
   SINGLE_PKT_RESP_PIGGYBACK,
   SINGLE_PKT_RESP_PASSTHROUGH,  
   HOST_FEEDBACK_MSG,
@@ -60,7 +67,9 @@ enum {
   MULTI_PKT_REQ,
   MULTI_PKT_RESP_PIGGYBACK,
   MULTI_PKT_RESP_PASSTHROUGH,  
-  CONTROL_MSG,
+  CONTROL_MSG_ROUTING_UPDATE,  // for updating routing table at runtime
+  CONTROL_MSG_SWITCH_ADDITION, // for adding addtional switch and servers at runtime
+  CONTROL_MSG_NODE_ADDITION,   // for adding addiotnal node to a switch at runtime
 };
 
 // static inline void set_alt_header_isfirst(struct alt_header *h){

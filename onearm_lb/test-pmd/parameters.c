@@ -144,7 +144,7 @@ usage(char* progname)
 	printf("  --enable-drop-en: enable per queue packet drop.\n");
 	//ST: help msg of enable-info-exchange
 	printf("  --enable-info-exchange: enable inter-switch to exchange information, e.g. load or queue depth\n");
-	printf("  --enable-rtt-measure: enable rtt meausurement in tx_only fwd mode\n");
+	printf("  --enable-replica-selection: enable rtt meausurement in tx_only fwd mode\n");
 	printf("  --disable-rss: disable rss.\n");
 	printf("  --port-topology=<paired|chained|loop>: set port topology (paired "
 	       "is default).\n");
@@ -631,7 +631,7 @@ launch_args_parse(int argc, char** argv)
 		{ "enable-hw-qinq-strip",       0, 0, 0 },
 		{ "enable-drop-en",            0, 0, 0 },
 		{ "enable-info-exchange",      0, 0, 0}, // ST: put our options here
-		{ "enable-rtt-measure",        0, 0, 0},
+		{ "enable-replica-selection",        0, 0, 0},
 		{ "disable-rss",                0, 0, 0 },
 		{ "port-topology",              1, 0, 0 },
 		{ "forward-mode",               1, 0, 0 },

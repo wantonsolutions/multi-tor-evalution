@@ -139,6 +139,12 @@ struct fwd_stream {
 	//ST: use hash table to lookup load and mac addr for rediretion
 	struct rte_hash *ip2load_table; //
 	struct rte_hash *ip2mac_table;  // read-only after init
+	struct rte_hash* routing_table;
+	uint32_t* local_ip_list;
+	uint32_t* switch_ip_list;
+	uint16_t switch_ip_list_length;
+	uint32_t switch_self_ip;
+
 	uint64_t* latency_records;
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	uint64_t     core_cycles; /**< used for RX and TX processing */

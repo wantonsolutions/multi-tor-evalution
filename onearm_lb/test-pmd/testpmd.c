@@ -129,14 +129,31 @@ static struct rte_hash_parameters ip2load_params = {
     .socket_id = 0,
 };
 
+static struct rte_hash_parameters routing_params = {
+	.name = "routing",
+    .entries = TOTAL_ENTRY,
+    .key_len = sizeof(uint32_t),
+    .hash_func = rte_jhash,
+    .hash_func_init_val = 0,
+    .socket_id = 0,
+};
+
 struct table_key* ip2load_keys;
 uint64_t* ip2load_values;
 
 uint32_t* ip2mac_keys;
 uint64_t* ip2mac_values;
 
-struct rte_hash* ip2load_table;
-struct rte_hash* ip2mac_table;
+uint32_t* routing_keys;
+uint64_t* routing_values;
+
+struct rte_hash* ip2load_table;  // <- ip_service_load*.txt"
+struct rte_hash* ip2mac_table;   // <- ip_mac*.txt
+struct rte_hash* routing_table;  // <- dest->next-hop
+uint32_t* local_ip_list;  // uint32_t ip1, uint32_t ip2 ....
+uint32_t* switch_ip_list; // uint32_t ip1, uint32_t ip2 ....
+uint16_t  switch_ip_list_length;
+uint32_t switch_self_ip;
 
 //ST: use rte_eth_dev_tx_buffer to deal with per-packet send/drop
 //TODO: see 5tswap.c for more detail
@@ -1475,6 +1492,18 @@ print_ether_addr(const char *what, const struct rte_ether_addr *eth_addr)
 	printf("%s%s\n", what, buf);
 }
 
+static inline void
+print_ipddr(const char* string, rte_be32_t ip_addr){
+	uint32_t ipaddr = rte_be_to_cpu_32(ip_addr);
+	uint8_t src_addr[4];
+	src_addr[0] = (uint8_t) (ipaddr >> 24) & 0xff;
+	src_addr[1] = (uint8_t) (ipaddr >> 16) & 0xff;
+	src_addr[2] = (uint8_t) (ipaddr >> 8) & 0xff;
+	src_addr[3] = (uint8_t) ipaddr & 0xff;
+	printf("%s:%" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", string,
+			src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+}
+
 //ST: for packet/request redirection 
 /*
 *  Init two hashtables needed for redirections:
@@ -1490,6 +1519,9 @@ init_hashtable(void){
 
 	ip2load_table = rte_hash_create(&ip2load_params);
 	HASH_RETURN_IF_ERROR(ip2load_table, ip2load_table == NULL, "ip2load_table creation failed");
+
+	routing_table = rte_hash_create(&routing_params);
+	HASH_RETURN_IF_ERROR(routing_table, routing_table == NULL, "routing_table creation failed");
 
 	//malloc for keys and values
 	ip2load_keys = rte_malloc("ip2load_keys", sizeof(struct table_key) * TOTAL_ENTRY, 0);
@@ -1511,6 +1543,26 @@ init_hashtable(void){
 	if(ip2mac_values == NULL){
 		rte_panic("malloc failure\n");
 	}
+
+	routing_keys = rte_zmalloc("routing_keys", sizeof(uint32_t) * TOTAL_ENTRY, 0);
+	if(routing_keys == NULL){
+		rte_panic("malloc failure\n");
+	}
+
+	routing_values = rte_zmalloc("routing_values", sizeof(uint64_t) * TOTAL_ENTRY, 0);
+	if(routing_values == NULL){
+		rte_panic("malloc failure\n");
+	}
+
+	local_ip_list = rte_zmalloc("local_ip_list", sizeof(uint32_t) * TOTAL_ENTRY, 0);
+	if(local_ip_list == NULL){
+		rte_panic("malloc failure\n");	
+	}
+
+	switch_ip_list = rte_zmalloc("switch_ip_list", sizeof(uint32_t) * TOTAL_ENTRY, 0);
+	if(switch_ip_list == NULL){
+		rte_panic("malloc failure\n");	
+	}
 	
 	//* Add a key-value pair to an existing hash table. This operation is not multi-thread safe
 	//int rte_hash_add_key_data(const struct rte_hash *h, const void *key, void *data);
@@ -1518,12 +1570,11 @@ init_hashtable(void){
 	//int rte_hash_lookup_data(const struct rte_hash *h, const void *key, void **data);
 
 	//load text from files
-	#ifdef REDIRECT_DEBUG_PRINT 
 	void* lookup_result;
 	struct rte_ether_addr* eth_addr_ptr;
-	#endif
 	//printf("ether_addr size: %zu\n", sizeof(struct rte_ether_addr)); // 6 bytes!
 	char *ip_addr = (char*) malloc(20);
+	char *nexthop_addr = (char*) malloc(20);
 	char *mac_addr = (char*) malloc(50);
 	#ifndef AWS_HASHTABLE
 	FILE* fp = fopen("./ip_service_load_local.txt", "r");
@@ -1595,7 +1646,94 @@ init_hashtable(void){
 		lookup1->addr_bytes[4], lookup1->addr_bytes[5]);
 		#endif
 	}
+
+	#ifndef AWS_HASHTABLE
+	fp = fopen("./routing_table_local.txt", "r");
+	#else
+	fp = fopen("./routing_table_aws.txt", "r");
+	#endif
+	fscanf(fp, "%d\n", &num_entries);
+	printf("routing table: num_entries %d\n", num_entries);
+	for(int i = 0; i < num_entries; i++){
+		fscanf(fp, "%s %s\n", ip_addr, nexthop_addr);
+		// local-ip -> ToR ip
+		routing_keys[i]   = inet_addr(ip_addr);
+		routing_values[i] = inet_addr(nexthop_addr);
+
+		int ret = rte_hash_add_key_data(routing_table, (void*) &routing_keys[i], (void *)((uintptr_t) &routing_values[i]));
+		HASH_RETURN_IF_ERROR(routing_table, ret < 0, "rte_hash_add_key_data failed with routing table");
+		//#ifdef REDIRECT_DEBUG_PRINT
+		ret = rte_hash_lookup_data(routing_table, (void*) &routing_keys[i], &lookup_result);
+		uint32_t* addr = (uint32_t*) lookup_result;
+		print_ipddr("ipv4_addr dest:", routing_keys[i]);
+		print_ipddr("ipv4_addr ToR :", *addr);
+		//#endif
+	}
+
+	fp = fopen("/tmp/local_ip_list.txt", "r");
+	fscanf(fp, "%d\n", &num_entries);
+	printf("local_ip_list: num_entries %d\n", num_entries);
+	for(int i = 0; i < num_entries; i++){
+		fscanf(fp, "%s\n", ip_addr);
+		uint32_t local_ip = inet_addr(ip_addr);
+		// over-write values for ip addrs in local_ip_list, the next-hop of local ip addrs are themselves
+		// non-local-ip -> ToR ip
+		// local-ip -> local-ip 
+		//int ret = rte_hash_add_key_data(routing_table, (void*) &local_ip, (void *)((uintptr_t) &local_ip));
+		//assign local ip to local_ip_list
+		local_ip_list[i] = local_ip;
+		int ret = rte_hash_add_key_data(routing_table, (void*) &local_ip_list[i], (void *)((uintptr_t) &local_ip_list[i]));
+		HASH_RETURN_IF_ERROR(routing_table, ret < 0, "rte_hash_add_key_data failed with routing table");		
+
+		//#ifdef REDIRECT_DEBUG_PRINT
+		ret = rte_hash_lookup_data(routing_table, (void*) &local_ip, &lookup_result);
+		uint32_t* addr = (uint32_t*) lookup_result;
+		print_ipddr("ipv4_addr dest    :", local_ip);
+		print_ipddr("ipv4_addr next-hop:", *addr);
+		//#endif
+	}
+
+	uint32_t iter = 0;
+	const void *next_key;
+	void *next_data;
+	while (rte_hash_iterate(routing_table, &next_key, &next_data, &iter) >= 0) {
+		uint32_t* dest_addr = (uint32_t*) next_key;
+		uint32_t* tor_addr= (uint32_t*) next_data;
+		print_ipddr("dest_addr:", *dest_addr);
+		print_ipddr("tor_addr:", *tor_addr);
+	}
+	
+	fp = fopen("/tmp/switch_self_ip.txt", "r");
+	fscanf(fp, "%s\n", ip_addr);
+	switch_self_ip = inet_addr(ip_addr);
+	//#ifdef REDIRECT_DEBUG_PRINT
+	print_ipddr("ipv4_addr switch_self_ip:", switch_self_ip);
+	//#endif
+
+	#ifndef AWS_HASHTABLE
+	fp = fopen("./switch_ip_list_local.txt", "r");
+	#else
+	fp = fopen("./switch_ip_list_aws.txt", "r");
+	#endif
+	fscanf(fp, "%d\n", &num_entries);
+	switch_ip_list_length = (uint16_t)(num_entries - 1); // excluding the swtich itself
+	printf("switch_ip_list: num_entries %d\n", num_entries);
+	int index = 0;
+	for(int i = 0; i < num_entries; i++){
+		fscanf(fp, "%s\n", ip_addr);
+		uint32_t switch_ip = inet_addr(ip_addr);
+		// prevent sending self-loop packets to itself
+		if( switch_ip != switch_self_ip){
+			switch_ip_list[index] = switch_ip;
+			index++;
+			#ifdef REDIRECT_DEBUG_PRINT
+			print_ipddr("ipv4_addr switch_ip:", switch_ip_list[i]);
+			#endif
+		}
+	}
+
 	free(ip_addr);
+	free(nexthop_addr);
 	free(mac_addr);
 	fclose(fp);
 
@@ -2036,6 +2174,11 @@ init_fwd_streams(void)
 					 "(struct fwd_stream) failed\n");
 			fwd_streams[sm_id]->ip2load_table = ip2load_table;
 			fwd_streams[sm_id]->ip2mac_table = ip2mac_table;
+			fwd_streams[sm_id]->routing_table = routing_table;
+			fwd_streams[sm_id]->local_ip_list = local_ip_list;
+			fwd_streams[sm_id]->switch_ip_list = switch_ip_list;
+			fwd_streams[sm_id]->switch_ip_list_length = switch_ip_list_length;
+			fwd_streams[sm_id]->switch_self_ip = switch_self_ip;
 		}
 	}
 
@@ -2565,8 +2708,8 @@ start_packet_forwarding(int with_tx_first)
 {
 	//STW: print out with_tx_first
 	//printf("with_tx_first:%d\n", with_tx_first);
-	port_fwd_begin_t port_fwd_begin;
-	port_fwd_end_t  port_fwd_end;
+	//port_fwd_begin_t port_fwd_begin;
+	//port_fwd_end_t  port_fwd_end;
 	struct rte_port *port;
 	unsigned int i;
 	portid_t   pt_id;
@@ -3351,8 +3494,14 @@ pmd_test_exit(void)
 	rte_free(ip2load_values);
 	rte_free(ip2mac_keys);
 	rte_free(ip2mac_values);
+	rte_free(routing_keys);
+	rte_free(routing_values);
+	rte_free(local_ip_list);
+	rte_free(switch_ip_list);
+
 	rte_hash_free(ip2load_table);
 	rte_hash_free(ip2mac_table);
+	rte_hash_free(routing_table);
 
 	printf("\nBye...\n");
 }

@@ -88,6 +88,18 @@ print_ether_addr(const char *what, const struct rte_ether_addr *eth_addr)
 	printf("%s%s\n", what, buf);
 }
 
+static inline void
+print_ipaddr(const char* string, rte_be32_t ip_addr){
+	uint32_t ipaddr = rte_be_to_cpu_32(ip_addr);
+	uint8_t src_addr[4];
+	src_addr[0] = (uint8_t) (ipaddr >> 24) & 0xff;
+	src_addr[1] = (uint8_t) (ipaddr >> 16) & 0xff;
+	src_addr[2] = (uint8_t) (ipaddr >> 8) & 0xff;
+	src_addr[3] = (uint8_t) ipaddr & 0xff;
+	printf("%s:%" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", string,
+			src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+}
+
 static void
 copy_buf_to_pkt_segs(void* buf, unsigned len, struct rte_mbuf *pkt,
 		     unsigned offset)
@@ -154,8 +166,8 @@ setup_pkt_udp_ip_headers(struct rte_ipv4_hdr *ip_hdr,
 	ip_hdr->next_proto_id = IPPROTO_UDP;
 	ip_hdr->packet_id = 0;
 	ip_hdr->total_length   = RTE_CPU_TO_BE_16(pkt_len);
-	ip_hdr->src_addr = rte_cpu_to_be_32(tx_ip_src_addr);
-	ip_hdr->dst_addr = rte_cpu_to_be_32(tx_ip_dst_addr);
+	ip_hdr->src_addr = tx_ip_src_addr; //rte_cpu_to_be_32(tx_ip_src_addr);
+	ip_hdr->dst_addr = tx_ip_dst_addr; //rte_cpu_to_be_32(tx_ip_dst_addr);
 
 	/*
 	 * Compute IP header checksum.
@@ -290,8 +302,7 @@ pkt_burst_transmit(struct fwd_stream *fs)
 	pkt_data_len = (uint16_t) (tx_pkt_length - (
 					sizeof(struct rte_ether_hdr) +
 					sizeof(struct rte_ipv4_hdr) +
-					sizeof(struct rte_udp_hdr)));
-	setup_pkt_udp_ip_headers(&pkt_ip_hdr, &pkt_udp_hdr, pkt_data_len);
+					sizeof(struct rte_udp_hdr)));		
 	eth_hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
 
 	pkt_alt_hdr.msgtype_flags = SWITCH_FEEDBACK_MSG;
@@ -313,20 +324,33 @@ pkt_burst_transmit(struct fwd_stream *fs)
 	/*
 	 * Initialize Ethernet header.
 	 */
-	// eth_hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
 	void* lookup_result;
-	int ret = rte_hash_lookup_data(fs->ip2mac_table, (void*) &pkt_ip_hdr.dst_addr, &lookup_result);
-	if(ret >= 0){
-		struct rte_ether_addr* lookup1 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
-		rte_ether_addr_copy(lookup1, &eth_hdr.d_addr);
-		print_ether_addr("ETH_DST_ADDR in TX:", &eth_hdr.d_addr);
-	}
 
-	uint16_t local_nb_pkt_per_burst = 1;
+	uint16_t local_nb_pkt_per_burst = fs->switch_ip_list_length;
 	for (nb_pkt = 0; nb_pkt < local_nb_pkt_per_burst; nb_pkt++) {
 		pkt = rte_mbuf_raw_alloc(mbp);
 		if (pkt == NULL)
 			break;
+
+		//assign src_addr and dst_addr
+		tx_ip_src_addr = fs->switch_self_ip;
+		tx_ip_dst_addr = fs->switch_ip_list[nb_pkt]; // BUG here!					
+		//print_ipaddr("tx_ip_src_addr", tx_ip_src_addr);
+		//print_ipaddr("tx_ip_dst_addr", tx_ip_dst_addr);
+		setup_pkt_udp_ip_headers(&pkt_ip_hdr, &pkt_udp_hdr, pkt_data_len);
+		//print_ipaddr("pkt_ip_hdr.src_addr", pkt_ip_hdr.src_addr);
+		//print_ipaddr("pkt_ip_hdr.dst_addr", pkt_ip_hdr.dst_addr);
+		// look up mac address of the selected switch ip address
+		int ret = rte_hash_lookup_data(fs->ip2mac_table, (void*) &pkt_ip_hdr.dst_addr, &lookup_result);
+		if(ret >= 0){
+			struct rte_ether_addr* lookup1 = (struct rte_ether_addr*)(uintptr_t) lookup_result;
+			rte_ether_addr_copy(lookup1, &eth_hdr.d_addr);
+			print_ether_addr("ETH_DST_ADDR in TX:", &eth_hdr.d_addr);
+		}
+		else{
+			print_ether_addr("ETH_DST_ADDR in TX with lookup errors:", &eth_hdr.d_addr);
+		}
+
 		if (unlikely(!pkt_burst_prepare(pkt, mbp, &eth_hdr,
 						vlan_tci,
 						vlan_tci_outer,
@@ -412,14 +436,14 @@ tx_only_begin(portid_t pi)
 					sizeof(struct rte_ether_hdr) +
 					sizeof(struct rte_ipv4_hdr) +
 					sizeof(struct rte_udp_hdr)));
-	setup_pkt_udp_ip_headers(&pkt_ip_hdr, &pkt_udp_hdr, pkt_data_len);
+	//setup_pkt_udp_ip_headers(&pkt_ip_hdr, &pkt_udp_hdr, pkt_data_len);
 	/*
 	 * Initialize Ethernet header.
 	 */
-	rte_ether_unformat_addr(mac_src_addr, &eth_hdr.s_addr);
-	print_ether_addr("ETH_SRC_ADDR:", &eth_hdr.s_addr);
-	rte_ether_unformat_addr(mac_dst_addr, &eth_hdr.d_addr);
-	print_ether_addr("ETH_DST_ADDR:", &eth_hdr.d_addr);
+	// rte_ether_unformat_addr(mac_src_addr, &eth_hdr.s_addr);
+	// print_ether_addr("ETH_SRC_ADDR:", &eth_hdr.s_addr);
+	// rte_ether_unformat_addr(mac_dst_addr, &eth_hdr.d_addr);
+	// print_ether_addr("ETH_DST_ADDR:", &eth_hdr.d_addr);
 	eth_hdr.ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
 }
 
