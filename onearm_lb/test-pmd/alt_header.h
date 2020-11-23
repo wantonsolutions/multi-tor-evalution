@@ -7,7 +7,8 @@
 #define LAST_FLAG 0x10
 #define HOST_PER_RACK 2
 #define NUM_REPLICA 3
-#define LOAD_THRESHOLD 1 // 30 requests threshold
+// 30, 2 for echo requests
+#define LOAD_THRESHOLD 10 // 30 requests threshold for echo request
 #define REDIRECT_BOUND 2  // how many times a request can be redirected
 
 //value -> uint16_t load_level but store with uint64_t format

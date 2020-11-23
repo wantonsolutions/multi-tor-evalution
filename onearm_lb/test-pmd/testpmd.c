@@ -1601,9 +1601,13 @@ init_hashtable(void){
 		int ret = rte_hash_add_key_data(ip2load_table, (void*) &ip2load_keys[i], (void *)((uintptr_t) &ip2load_values[i]));
 		HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_add_key_data failed with data %" PRIu64"\n", ip2load_values[i]);
 
-		// ret = rte_hash_lookup_data(ip2load_table, (void*) &ip2load_keys[i], &lookup_result);
-		// HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data failed with data %" PRIu64"\n", (uint64_t)(uintptr_t) lookup_result);
-		// uint64_t* ptr = (uint64_t*) lookup_result;
+		//printf("value insert addr: %p\n", (void*) &ip2load_values[i]);
+		ret = rte_hash_lookup_data(ip2load_table, (void*) &ip2load_keys[i], &lookup_result);
+		HASH_RETURN_IF_ERROR(ip2load_table, ret < 0, "rte_hash_lookup_data failed with data %" PRIu64"\n", (uint64_t)(uintptr_t) lookup_result);
+		//printf("value lookup addr: %p\n", lookup_result);
+		uint64_t* ptr = (uint64_t*) lookup_result;
+		printf("value lookup:%" PRIu64 "\n", *ptr);
+		//*ptr = 100; //*ptr + 1;
 		//printf("lookup should find %" PRIu64 ", and it finds a value %" PRIu64 "\n", ip2load_values[i], *ptr);
 	}
 

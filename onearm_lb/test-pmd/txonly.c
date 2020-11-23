@@ -250,11 +250,22 @@ pkt_burst_prepare(struct rte_mbuf *pkt, struct rte_mempool *mbp,
 	while (rte_hash_iterate(fs->ip2load_table, &next_key, &next_data, &iter) >= 0) {
 		struct table_key* ip_service_pair = (struct table_key*) (uintptr_t) next_key;
 		uint64_t* load_value = (uint64_t*) (uintptr_t) next_data;
-		pkt_alt_hdr.service_id_list[index] = ip_service_pair->service_id;
-		pkt_alt_hdr.host_ip_list[index] = ip_service_pair->ip_dst;
-		pkt_alt_hdr.host_queue_depth[index] = (uint16_t) *load_value;
-		index++;
+		for(uint32_t host_index = 0; host_index < HOST_PER_RACK; host_index++){
+			if(ip_service_pair->ip_dst == fs->local_ip_list[host_index]){
+				pkt_alt_hdr.service_id_list[index] = ip_service_pair->service_id;
+				pkt_alt_hdr.host_ip_list[index] = ip_service_pair->ip_dst;
+				print_ipaddr("rte_hash_iterate, ip_dst", pkt_alt_hdr.host_ip_list[index]);
+				pkt_alt_hdr.host_queue_depth[index] = (uint16_t) *load_value;
+				index++;
+				break;
+			}
+		}
 	}
+
+	// for(uint32_t host_index = 0; host_index < HOST_PER_RACK; host_index++){
+	// 	fs->local_ip_list[host_index];
+	// 	int ret = rte_hash_lookup_data(fs->ip2load_table, (void*) &ip_service_key, &lookup_result);
+	// }
 	//pkt_alt_hdr.header_size = 24 + 8 * index;
 
 	copy_buf_to_pkt(&pkt_alt_hdr, sizeof(pkt_alt_hdr), pkt,
@@ -334,7 +345,7 @@ pkt_burst_transmit(struct fwd_stream *fs)
 
 		//assign src_addr and dst_addr
 		tx_ip_src_addr = fs->switch_self_ip;
-		tx_ip_dst_addr = fs->switch_ip_list[nb_pkt]; // BUG here!					
+		tx_ip_dst_addr = fs->switch_ip_list[nb_pkt];					
 		//print_ipaddr("tx_ip_src_addr", tx_ip_src_addr);
 		//print_ipaddr("tx_ip_dst_addr", tx_ip_dst_addr);
 		setup_pkt_udp_ip_headers(&pkt_ip_hdr, &pkt_udp_hdr, pkt_data_len);
