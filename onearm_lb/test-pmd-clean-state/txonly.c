@@ -57,15 +57,15 @@ struct req_header pkt_req_hdr;
 uint16_t tx_udp_src_port = 7000;
 uint16_t tx_udp_dst_port = 7000;
 
-//uint32_t tx_ip_src_addr = RTE_IPV4(172, 31, 32, 235);
-//uint32_t tx_ip_dst_addr = RTE_IPV4(172, 31, 34, 51);
-//char* mac_src_addr = "06:97:39:b3:67:3f"; //172.31.32.235 06:97:39:b3:67:3f
-//char* mac_dst_addr = "06:96:c2:b8:68:09"; //172.31.34.51  06:96:c2:b8:68:09 
+uint32_t tx_ip_src_addr = RTE_IPV4(172, 31, 32, 235);
+uint32_t tx_ip_dst_addr = RTE_IPV4(172, 31, 34, 51);
+char* mac_src_addr = "06:97:39:b3:67:3f"; //172.31.32.235 06:97:39:b3:67:3f
+char* mac_dst_addr = "06:96:c2:b8:68:09"; //172.31.34.51  06:96:c2:b8:68:09 
 
-uint32_t tx_ip_src_addr = RTE_IPV4(10, 0, 0, 18);
-uint32_t tx_ip_dst_addr = RTE_IPV4(10 ,0, 0, 4);
-char* mac_src_addr = "ec:0d:9a:68:21:c0"; //10.0.0.18 -> ec:0d:9a:68:21:c0
-char* mac_dst_addr = "ec:0d:9a:68:21:a8"; //10.0.0.4  -> ec:0d:9a:68:21:a8
+//uint32_t tx_ip_src_addr = RTE_IPV4(10, 0, 0, 18);
+//uint32_t tx_ip_dst_addr = RTE_IPV4(10 ,0, 0, 4);
+//char* mac_src_addr = "ec:0d:9a:68:21:c0"; //10.0.0.18 -> ec:0d:9a:68:21:c0
+//char* mac_dst_addr = "ec:0d:9a:68:21:a8"; //10.0.0.4  -> ec:0d:9a:68:21:a8
 struct rte_ether_hdr eth_hdr;
 
 #define IP_DEFTTL  64   /* from RFC 1340. */
@@ -503,9 +503,9 @@ pkt_burst_transmit(struct fwd_stream *fs)
 	// rte_eth_rx_burst_mode_get(fs->rx_port, fs->rx_queue, &mode);
 	// printf("%s\n", mode.info); // Vector SSE!
 	
-	//clock_gettime(CLOCK_REALTIME, &ts3);
-	//sleep_ts1=ts3;
-	//realnanosleep(100*1000, &sleep_ts1, &sleep_ts2); // 500 us
+	clock_gettime(CLOCK_REALTIME, &ts3);
+	sleep_ts1=ts3;
+	realnanosleep(5*1000, &sleep_ts1, &sleep_ts2); // 100 us
 
 #ifdef RTE_TEST_PMD_RECORD_CORE_CYCLES
 	end_tsc = rte_rdtsc();
