@@ -99,7 +99,7 @@
  */
 //#define REDIRECT_DEBUG_PRINT 1
 //#define REDIRECT_HASHTABLE_TEST 1
-//#define AWS_HASHTABLE 1
+#define AWS_HASHTABLE 1
 #define HASH_RETURN_IF_ERROR(handle, cond, str, ...) do {                \
     if (cond) {                         \
         printf("ERROR line %d: " str "\n", __LINE__, ##__VA_ARGS__); \
