@@ -138,6 +138,8 @@ bind_devices_to_igb_uio()
 		echo ""
 		PCI_PATH=0000:00:07.0
 		sudo ${RTE_SDK}/usertools/dpdk-devbind.py -b igb_uio $PCI_PATH && echo $PCI_PATH "OK"
+
+		${RTE_SDK}/usertools/dpdk-devbind.py --status
 	else
 		echo "# Please load the 'igb_uio' kernel module before querying or "
 		echo "# adjusting device bindings"
