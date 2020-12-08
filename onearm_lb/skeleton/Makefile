@@ -5,7 +5,7 @@
 APP = basicfwd
 
 # all source are stored in SRCS-y
-SRCS-y := basicfwd.c
+SRCS-y := basicfwd.c packets.c
 
 # Build using pkg-config variables if possible
 ifeq ($(shell pkg-config --exists libdpdk && echo 0),0)

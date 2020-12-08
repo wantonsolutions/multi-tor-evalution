@@ -13,32 +13,20 @@
 #include <rte_ether.h>
 #include <rte_ip.h>
 #include <rte_udp.h>
+#include "basicfwd.h"
 #include "alt_header.h"
+#include "packets.h"
 
-//#define PACKET_DEBUG_PRINTOUT 1
-//#define TURN_PACKET_AROUND 1
-
-#define DEBUG 2
-#define INFO 1
-#define NONE 0
-
-//#define LOG_LEVEL DEBUG
-#define LOG_LEVEL NONE
-
-#define RX_RING_SIZE 1024
-#define TX_RING_SIZE 1024
-
-#define NUM_MBUFS 8191
-#define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 32
 
 int log_printf(int level, const char *format, ...) {
 	va_list args;
     va_start(args, format);
+	int ret = 0;
 	if (LOG_LEVEL >= level) {
-		vprintf(format,args);
+		ret = vprintf(format,args);
 	}
 	va_end(args);
+	return ret;
 }
 
 static const struct rte_eth_conf port_conf_default = {
@@ -133,7 +121,7 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 }
 
 
-inline struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
+struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
 	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
 
 	if(eth_hdr->ether_type == rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4)){									
@@ -170,7 +158,7 @@ inline struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
 
 }
 
-static inline struct rte_ipv4_hdr* ipv4_hdr_process(struct rte_ether_hdr *eth_hdr) {
+struct rte_ipv4_hdr* ipv4_hdr_process(struct rte_ether_hdr *eth_hdr) {
 
 	struct rte_ipv4_hdr* ipv4_hdr = (struct rte_ipv4_hdr *)((uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr));
 	int hdr_len = (ipv4_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) * RTE_IPV4_IHL_MULTIPLIER;
@@ -213,7 +201,7 @@ static inline struct rte_ipv4_hdr* ipv4_hdr_process(struct rte_ether_hdr *eth_hd
 	return NULL;
 }
 
-static inline struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
+struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
 
 	//ipv4_udp_rx++;
 	//log_printf(INFO,"ipv4_udp_rx:%" PRIu16 "\n",ipv4_udp_rx);
@@ -300,7 +288,6 @@ lcore_main(void)
 				struct rte_ipv4_hdr *ipv4_hdr; 
 				struct rte_udp_hdr* udp_hdr;
 				
-				struct alt_header* alt;
 
 				#ifdef PACKET_DEBUG_PRINTOUT	
 				#endif
@@ -392,6 +379,9 @@ main(int argc, char *argv[])
 
 	if (rte_lcore_count() > 1)
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
+
+	printf("Running on #%d cores\n",rte_lcore_count());
+
 
 	/* Call lcore_main on the master core only. */
 	lcore_main();
