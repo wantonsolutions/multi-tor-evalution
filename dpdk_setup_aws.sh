@@ -129,17 +129,17 @@ set_non_numa_pages()
 bind_devices_to_igb_uio()
 {
 	if [ -d /sys/module/igb_uio ]; then
-		${RTE_SDK}/usertools/dpdk-devbind.py --status
+		python3 ${RTE_SDK}/usertools/dpdk-devbind.py --status
 		echo ""
 		echo -n "Enter PCI address of device to bind to IGB UIO driver: "
 		#read PCI_PATH
 		PCI_PATH=0000:00:06.0
-		sudo ${RTE_SDK}/usertools/dpdk-devbind.py -b igb_uio $PCI_PATH && echo $PCI_PATH "OK"
-		echo ""
-		PCI_PATH=0000:00:07.0
-		sudo ${RTE_SDK}/usertools/dpdk-devbind.py -b igb_uio $PCI_PATH && echo $PCI_PATH "OK"
+		sudo python3 ${RTE_SDK}/usertools/dpdk-devbind.py -b igb_uio $PCI_PATH && echo $PCI_PATH "OK"
+		#echo ""
+		#PCI_PATH=0000:00:07.0
+		#sudo ${RTE_SDK}/usertools/dpdk-devbind.py -b igb_uio $PCI_PATH && echo $PCI_PATH "OK"
 
-		${RTE_SDK}/usertools/dpdk-devbind.py --status
+		python3 ${RTE_SDK}/usertools/dpdk-devbind.py --status
 	else
 		echo "# Please load the 'igb_uio' kernel module before querying or "
 		echo "# adjusting device bindings"
@@ -188,7 +188,7 @@ setup_target()
 ifdown()
 {
    sudo ifconfig eth1 down
-   sudo ifconfig eth2 down
+   #sudo ifconfig eth2 down
 }
 
 #setup_target

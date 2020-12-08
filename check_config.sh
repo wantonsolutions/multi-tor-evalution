@@ -58,9 +58,32 @@ if [ ! -f /tmp/switch_self_ip.txt ];then
 fi
 }
 
-#check_routing_config()
-#{
-#}
+check_routing_config()
+{
+if [ ! -f ~/multi-tor-evalution/onearm_lb/test-pmd/routing_table_aws.txt ];then
+        echo "## ERROR: Missed file ~/multi-tor-evalution/onearm_lb/test-pmd/routing_table_aws.txt"
+        return
+else
+	read num_line < ~/multi-tor-evalution/onearm_lb/test-pmd/routing_table_aws.txt
+	n=0
+        while read line; do # reading each line
+        #echo $line
+        n=$((n+1))
+        done < ~/multi-tor-evalution/onearm_lb/test-pmd/routing_table_aws.txt
+
+        n=$((n-1)) #subtract out the first line
+        if [ ${n} -ne ${num_line} ]; then
+                echo "invlid file of ~/multi-tor-evalution/onearm_lb/test-pmd/routing_table_aws.txt"
+                return
+        fi
+fi
+}
+
+check_ip2mac_config(){
+	python3 check_ip2mac.py	
+}
 
 gen_host_dep_config
 check_host_dep_config
+check_routing_config
+check_ip2mac_config
