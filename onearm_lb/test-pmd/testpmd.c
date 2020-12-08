@@ -155,9 +155,6 @@ uint32_t* switch_ip_list; // uint32_t ip1, uint32_t ip2 ....
 uint16_t  switch_ip_list_length;
 uint32_t switch_self_ip;
 
-//ST: use rte_eth_dev_tx_buffer to deal with per-packet send/drop
-//TODO: see 5tswap.c for more detail
-//RTE_DECLARE_PER_LCORE(struct rte_eth_dev_tx_buffer *, tx_buf);
 
 //ST: define info_exchange_enabled and replica_selection_enabled here
 uint8_t info_exchange_enabled = 0;
@@ -324,8 +321,8 @@ uint8_t dcb_test = 0;
  * Configurable number of RX/TX queues.
  */
 queueid_t nb_hairpinq; /**< Number of hairpin queues per port. */
-queueid_t nb_rxq = 4; /**< Number of RX queues per port. */
-queueid_t nb_txq = 4; /**< Number of TX queues per port. */
+queueid_t nb_rxq = 5; /**< Number of RX queues per port. */
+queueid_t nb_txq = 5; /**< Number of TX queues per port. */
 
 /*
  * Configurable number of RX/TX ring descriptors.
@@ -2053,7 +2050,8 @@ init_config(void)
 
 	//fwd_config_setup();
 	//simple_fwd_config_setup();
-	rss_fwd_config_setup();
+	//rss_fwd_config_setup();
+	replica_selection_fwd_config_setup();
 
 	/* create a gro context for each lcore */
 	gro_param.gro_types = RTE_GRO_TCP_IPV4;
@@ -2641,9 +2639,9 @@ launch_info_exchange_and_forwarding(lcore_function_t *pkt_fwd_on_lcore,
 	}
 	nb_pkt_per_burst = 4;
 	
-	//TODO: info_exchange_enabled
-	// 0 to cur_fwd_config.nb_fwd_lcores-2 th cores do forwarding
-	// cur_fwd_config.nb_fwd_lcores th core do information exchange  
+	// ST: info_exchange_enabled
+	// 1 to cur_fwd_config.nb_fwd_lcores-1 th cores do forwarding
+	// 0th core do information exchange  
 
 	lc_id = fwd_lcores_cpuids[0];
 	if ((interactive == 0) || (lc_id != rte_lcore_id())) {
@@ -2704,6 +2702,33 @@ launch_packet_forwarding(lcore_function_t *pkt_fwd_on_lcore)
 	}
 }
 
+//ST: RETA setup function here!
+static int
+rss_reta_setup(uint16_t port_id, uint16_t reta_size, uint16_t num_rx_queue)
+{
+    struct rte_eth_rss_reta_entry64 reta_conf[4];
+    uint16_t i;
+    int status;
+    /* RETA setting */
+    memset(reta_conf, 0, sizeof(reta_conf));
+    for (i = 0; i < reta_size; i++)
+        reta_conf[i / RTE_RETA_GROUP_SIZE].mask = UINT64_MAX;
+		
+    for (i = 0; i < reta_size; i++) {
+        uint16_t reta_id = i / RTE_RETA_GROUP_SIZE;
+        uint16_t reta_pos = i % RTE_RETA_GROUP_SIZE;
+		// normal case:
+        //uint16_t rss_qs_pos = i % num_rx_queue;
+		// Our case: we leave the last queue for load info tx
+		uint16_t rss_qs_pos = (i % (num_rx_queue-1)) + 1; 
+
+        reta_conf[reta_id].reta[reta_pos] = rss_qs_pos;
+    }
+    /* RETA update */
+    status = rte_eth_dev_rss_reta_update(port_id, reta_conf, reta_size);
+    return status;
+}
+//ST: RETA setup in start_packet_forwarding
 /*
  * Launch packet forwarding configuration.
  */
@@ -2745,6 +2770,22 @@ start_packet_forwarding(int with_tx_first)
 		pt_id = fwd_ports_ids[i];
 		port = &ports[pt_id];
 		map_port_queue_stats_mapping_registers(pt_id, port);
+
+		//RETA setup for RSS multi-queue
+		uint16_t dev_reta_size = port->dev_info.reta_size;
+		printf("reta_size:%" PRIu16 "\n", dev_reta_size);
+		if (dev_reta_size == 0) {
+			printf("Redirection table size is 0 which is invalid for RSS\n");
+			return;
+		} else
+			printf("The reta size of port %d is %u\n",
+				pt_id, dev_reta_size);
+		if (dev_reta_size > ETH_RSS_RETA_SIZE_512) {
+			printf("Currently do not support more than %u entries of "
+				"redirection table\n", ETH_RSS_RETA_SIZE_512);
+			return;
+		}
+		rss_reta_setup(pt_id, dev_reta_size, nb_rxq);
 	}
 
 	if(info_exchange_enabled)
@@ -3784,6 +3825,7 @@ map_port_queue_stats_mapping_registers(portid_t pi, struct rte_port *port)
 					"failed for port id=%d diag=%d\n",
 					pi, diag);
 	}
+	port->tx_queue_stats_mapping_enabled = 1;
 
 	diag = set_rx_queue_stats_mapping_registers(pi, port);
 	if (diag != 0) {
@@ -3797,6 +3839,7 @@ map_port_queue_stats_mapping_registers(portid_t pi, struct rte_port *port)
 					"failed for port id=%d diag=%d\n",
 					pi, diag);
 	}
+	port->rx_queue_stats_mapping_enabled = 1;
 }
 
 static void

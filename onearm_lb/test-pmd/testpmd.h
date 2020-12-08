@@ -729,6 +729,7 @@ void rxtx_config_display(void);
 void fwd_config_setup(void);
 void simple_fwd_config_setup(void);
 void rss_fwd_config_setup(void);
+void replica_selection_fwd_config_setup(void);
 void set_def_fwd_config(void);
 void reconfig(portid_t new_port_id, unsigned socket_id);
 int init_fwd_streams(void);

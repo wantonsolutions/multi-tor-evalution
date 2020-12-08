@@ -2123,8 +2123,8 @@ rxtx_config_display(void)
 				rx_conf[qid].offloads);
 			printf("      RX drop_enable %"PRIu8"\n",
 				rx_qinfo.conf.rx_drop_en);
-			printf("      RX mempool name %s\n",
-				rx_qinfo.mp->name);
+			//printf("      RX mempool name %s\n",
+			//	rx_qinfo.mp->name);
 		}
 
 		/* per tx queue config only for first queue to be less verbose */
@@ -2446,11 +2446,11 @@ rss_fwd_config_setup(void)
 	}
 }
 
-//ST: using one core for info exchange?
+//ST: using one core for info exchange
 void
 replica_selection_fwd_config_setup(void)
 {
-	printf("rss_fwd_config_setup\n");
+	printf("replica_selection_fwd_config_setup\n");
 	cur_fwd_config.fwd_eng = cur_fwd_eng;
 	
 	portid_t   rxp;
@@ -2462,9 +2462,19 @@ replica_selection_fwd_config_setup(void)
 	nb_q = nb_rxq;
 	if (nb_q > nb_txq)
 		nb_q = nb_txq;
-	cur_fwd_config.nb_fwd_lcores = (lcoreid_t) nb_fwd_lcores;
+
+	uint16_t nb_current_lcores= (uint16_t) nb_fwd_lcores;
+	// We don't want # of cores < # of queues
+	// a queue should at least has a core to run on
+	if(nb_q > nb_current_lcores){
+		nb_current_lcores = nb_q;
+		cur_fwd_config.nb_fwd_lcores = (lcoreid_t) nb_current_lcores;
+	}
+	else{
+		cur_fwd_config.nb_fwd_lcores = (lcoreid_t) nb_fwd_lcores;
+	}
+
 	cur_fwd_config.nb_fwd_ports = nb_fwd_ports;
-	// the last queue will be used for tx-only!
 	cur_fwd_config.nb_fwd_streams = (streamid_t) (nb_q* cur_fwd_config.nb_fwd_ports);
 
 	if (cur_fwd_config.nb_fwd_streams < cur_fwd_config.nb_fwd_lcores)
@@ -2474,6 +2484,7 @@ replica_selection_fwd_config_setup(void)
 	// nb_fwd_lcores ==  nb_fwd_streams
 	printf("cur_fwd_config.nb_fwd_lcores:%" PRIu8 "\n", cur_fwd_config.nb_fwd_lcores);
 	printf("cur_fwd_config.nb_fwd_streams:%" PRIu8 "\n", cur_fwd_config.nb_fwd_streams);
+	// the first lcore, fwd_stream is used for info_exchange_on_lcore
 
 	/* reinitialize forwarding streams */
 	init_fwd_streams();
@@ -2484,7 +2495,7 @@ replica_selection_fwd_config_setup(void)
 		struct fwd_stream *fs;
 
 		fs = fwd_streams[sm_id];
-		txp = fwd_topology_tx_port_get(rxp);
+		txp = rxp; //fwd_topology_tx_port_get(rxp);
 		fs->rx_port = fwd_ports_ids[rxp];
 		fs->rx_queue = rxq;
 		fs->tx_port = fwd_ports_ids[txp];

@@ -254,7 +254,7 @@ pkt_burst_prepare(struct rte_mbuf *pkt, struct rte_mempool *mbp,
 			if(ip_service_pair->ip_dst == fs->local_ip_list[host_index]){
 				pkt_alt_hdr.service_id_list[index] = ip_service_pair->service_id;
 				pkt_alt_hdr.host_ip_list[index] = ip_service_pair->ip_dst;
-				print_ipaddr("rte_hash_iterate, ip_dst", pkt_alt_hdr.host_ip_list[index]);
+				//print_ipaddr("rte_hash_iterate, ip_dst", pkt_alt_hdr.host_ip_list[index]);
 				pkt_alt_hdr.host_queue_depth[index] = (uint16_t) *load_value;
 				index++;
 				break;
@@ -351,6 +351,9 @@ pkt_burst_transmit(struct fwd_stream *fs)
 		setup_pkt_udp_ip_headers(&pkt_ip_hdr, &pkt_udp_hdr, pkt_data_len);
 		//print_ipaddr("pkt_ip_hdr.src_addr", pkt_ip_hdr.src_addr);
 		//print_ipaddr("pkt_ip_hdr.dst_addr", pkt_ip_hdr.dst_addr);
+
+		//TODO: check whether src mac addr would have make tx-only buggy?
+		//print_ether_addr("ETH_SRC_ADDR in TX:", &eth_hdr.s_addr);
 		// look up mac address of the selected switch ip address
 		int ret = rte_hash_lookup_data(fs->ip2mac_table, (void*) &pkt_ip_hdr.dst_addr, &lookup_result);
 		if(ret >= 0){
