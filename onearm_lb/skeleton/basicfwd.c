@@ -3,6 +3,7 @@
  */
 
 #include <stdint.h>
+#include <stdarg.h>
 #include <inttypes.h>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
@@ -14,7 +15,15 @@
 #include <rte_udp.h>
 #include "alt_header.h"
 
-#define PACKET_DEBUG_PRINTOUT 1
+//#define PACKET_DEBUG_PRINTOUT 1
+//#define TURN_PACKET_AROUND 1
+
+#define DEBUG 2
+#define INFO 1
+#define NONE 0
+
+//#define LOG_LEVEL DEBUG
+#define LOG_LEVEL NONE
 
 #define RX_RING_SIZE 1024
 #define TX_RING_SIZE 1024
@@ -22,6 +31,15 @@
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 32
+
+int log_printf(int level, const char *format, ...) {
+	va_list args;
+    va_start(args, format);
+	if (LOG_LEVEL >= level) {
+		vprintf(format,args);
+	}
+	va_end(args);
+}
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
@@ -114,6 +132,127 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	return 0;
 }
 
+
+inline struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
+	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
+
+	if(eth_hdr->ether_type == rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4)){									
+
+		#ifdef TURN_PACKET_AROUND
+		//Swap ethernet addresses
+		struct rte_ether_addr temp_eth_addr   = eth_hdr->s_addr;
+		eth_hdr->s_addr = eth_hdr->d_addr;
+		eth_hdr->d_addr = temp_eth_addr;
+		#endif
+
+		#ifdef PACKET_DEBUG_PRINTOUT
+		// L2 headers
+		struct rte_ether_addr src_macaddr;
+		struct rte_ether_addr dst_macaddr;	
+
+		src_macaddr = eth_hdr->s_addr;
+		dst_macaddr = eth_hdr->d_addr;
+		printf("src_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+			src_macaddr.addr_bytes[0], src_macaddr.addr_bytes[1],
+			src_macaddr.addr_bytes[2], src_macaddr.addr_bytes[3],
+			src_macaddr.addr_bytes[4], src_macaddr.addr_bytes[5]);
+
+		printf("dst_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+			dst_macaddr.addr_bytes[0], dst_macaddr.addr_bytes[1],
+			dst_macaddr.addr_bytes[2], dst_macaddr.addr_bytes[3],
+			dst_macaddr.addr_bytes[4], dst_macaddr.addr_bytes[5]);
+		#endif
+		return eth_hdr;
+	}
+	return NULL;
+
+}
+
+static inline struct rte_ipv4_hdr* ipv4_hdr_process(struct rte_ether_hdr *eth_hdr) {
+
+	struct rte_ipv4_hdr* ipv4_hdr = (struct rte_ipv4_hdr *)((uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr));
+	int hdr_len = (ipv4_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) * RTE_IPV4_IHL_MULTIPLIER;
+
+	if (hdr_len == sizeof(struct rte_ipv4_hdr)) {
+
+		#ifdef TURN_PACKET_AROUND
+		//Swap ipv4 addr
+		uint32_t temp_ipv4_addr = ipv4_hdr->src_addr;
+		ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
+		ipv4_hdr->dst_addr = temp_ipv4_addr;
+		#endif
+		
+		#ifdef PACKET_DEBUG_PRINTOUT
+		// L3 headers: IPv4
+		uint32_t dst_ipaddr;
+		uint32_t src_ipaddr;
+
+		src_ipaddr = rte_be_to_cpu_32(ipv4_hdr->src_addr);
+		dst_ipaddr = rte_be_to_cpu_32(ipv4_hdr->dst_addr);
+		uint8_t src_addr[4];
+		src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
+		src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
+		src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
+		src_addr[3] = (uint8_t) src_ipaddr & 0xff;
+		printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
+				src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+
+		uint8_t dst_addr[4];
+		dst_addr[0] = (uint8_t) (dst_ipaddr >> 24) & 0xff;
+		dst_addr[1] = (uint8_t) (dst_ipaddr >> 16) & 0xff;
+		dst_addr[2] = (uint8_t) (dst_ipaddr >> 8) & 0xff;
+		dst_addr[3] = (uint8_t) dst_ipaddr & 0xff;
+		printf("dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
+			dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
+		#endif		
+
+		return ipv4_hdr;
+	}
+	return NULL;
+}
+
+static inline struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
+
+	//ipv4_udp_rx++;
+	//log_printf(INFO,"ipv4_udp_rx:%" PRIu16 "\n",ipv4_udp_rx);
+
+	struct rte_udp_hdr * udp_hdr = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
+	if (ipv4_hdr->next_proto_id == IPPROTO_UDP){
+
+		#ifdef TURN_PACKET_AROUND
+		//Swap udp ports
+		uint16_t temp_udp_port = udp_hdr->src_port;
+		udp_hdr->src_port = udp_hdr->dst_port; 
+		udp_hdr->dst_port = temp_udp_port;							
+		udp_hdr->dgram_len = rte_cpu_to_be_16(sizeof(struct alt_header) + sizeof(struct rte_udp_hdr));
+		//alt = (struct alt_header *)((uint8_t *)udp_hdr + sizeof(struct rte_udp_hdr));
+		#endif
+
+		#ifdef PACKET_DEBUG_PRINTOUT
+
+		// L4 headers: UDP 
+		uint16_t dst_port = 0;
+		uint16_t src_port = 0;
+		dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
+		src_port = rte_be_to_cpu_16(udp_hdr->src_port);
+		//Because of the way we fill in these data, we don't need rte_be_to_cpu_32 or rte_be_to_cpu_16 
+		uint32_t req_id = alt->request_id;
+		uint16_t service_id = alt->service_id;
+		printf("src_port:%" PRIu16 ", dst_port:%" PRIu16 "\n", src_port, dst_port);
+		printf("service_id:%" PRIu16 "req_id:%" PRIu32 "\n", service_id, req_id);
+		printf("-------------------\n");
+		#endif
+
+		//udp_hdr->dgram_cksum = 0;									
+		//udp_hdr->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_hdr, (void*)udp_hdr);
+
+		return udp_hdr;
+	}
+	return NULL;
+}
+
 /*
  * The lcore main. This is the main thread that does the work, reading from
  * an input port and writing to an output port.
@@ -131,11 +270,11 @@ lcore_main(void)
 		if (rte_eth_dev_socket_id(port) > 0 &&
 				rte_eth_dev_socket_id(port) !=
 						(int)rte_socket_id())
-			printf("WARNING, port %u is on remote NUMA node to "
+			log_printf(INFO,"WARNING, port %u is on remote NUMA node to "
 					"polling thread.\n\tPerformance will "
 					"not be optimal.\n", port);
 
-	printf("\nCore %u forwarding packets. [Ctrl+C to quit]\n",
+	log_printf(INFO,"\nCore %u forwarding packets. [Ctrl+C to quit]\n",
 			rte_lcore_id());
 
 	/* Run until the application is quit or killed. */
@@ -149,157 +288,66 @@ lcore_main(void)
 
 			/* Get burst of RX packets, from first and only port */
 			struct rte_mbuf *rx_pkts[BURST_SIZE];
-			const uint16_t nb_rx = rte_eth_rx_burst(port, 0,
-					rx_pkts, BURST_SIZE);
+			const uint16_t nb_rx = rte_eth_rx_burst(port, 0, rx_pkts, BURST_SIZE);
 		
 			if (unlikely(nb_rx == 0))
 				continue;
 
-			printf("rx:%" PRIu16 "\n",nb_rx);			
-			// for (uint16_t i = 0; i < nb_rx; i++){
-			// 	struct rte_ether_hdr* eth_hdr = rte_pktmbuf_mtod(rx_pkts[i], struct rte_ether_hdr *);
-			// 	if(eth_hdr->ether_type == rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4)){
-			// 		printf("type: %x \n", eth_hdr->ether_type);
-			// 	}
-			// 	else{
-			// 		printf("type: %x \n", eth_hdr->ether_type);
-			// 	}
-			// 	rte_pktmbuf_free(rx_pkts[i]);
-			// }	
+			log_printf(INFO,"rx:%" PRIu16 "\n",nb_rx);			
 
 			for (uint16_t i = 0; i < nb_rx; i++){
-				uint32_t packet_type = RTE_PTYPE_UNKNOWN;
-				// L2 headers
 				struct rte_ether_hdr* eth_hdr;
-				struct rte_ether_addr temp_eth_addr;
-				// L3 headers: IPv4
 				struct rte_ipv4_hdr *ipv4_hdr; 
-				uint32_t temp_ipv4_addr;
-				// L4 headers: UDP 
 				struct rte_udp_hdr* udp_hdr;
-				uint16_t temp_udp_port;
-				// our own header: alt
+				
 				struct alt_header* alt;
 
 				#ifdef PACKET_DEBUG_PRINTOUT	
-				// L2 headers
-				struct rte_ether_addr src_macaddr;
-				struct rte_ether_addr dst_macaddr;	
-				// L3 headers: IPv4
-				uint32_t dst_ipaddr;
-				uint32_t src_ipaddr;
-				// L4 headers: UDP 
-				uint16_t dst_port = 0;
-				uint16_t src_port = 0;
 				#endif
 
-				eth_hdr = rte_pktmbuf_mtod(rx_pkts[i], struct rte_ether_hdr *);
+				eth_hdr = eth_hdr_process(rx_pkts[i]);
 
-				if(eth_hdr->ether_type == rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4)){									
-					temp_eth_addr   = eth_hdr->s_addr;
-					eth_hdr->s_addr = eth_hdr->d_addr;
-					eth_hdr->d_addr = temp_eth_addr;
-
-					#ifdef PACKET_DEBUG_PRINTOUT
-					src_macaddr = eth_hdr->s_addr;
-					dst_macaddr = eth_hdr->d_addr;
-					printf("src_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-						src_macaddr.addr_bytes[0], src_macaddr.addr_bytes[1],
-						src_macaddr.addr_bytes[2], src_macaddr.addr_bytes[3],
-						src_macaddr.addr_bytes[4], src_macaddr.addr_bytes[5]);
-
-					printf("dst_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-						" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-						dst_macaddr.addr_bytes[0], dst_macaddr.addr_bytes[1],
-						dst_macaddr.addr_bytes[2], dst_macaddr.addr_bytes[3],
-						dst_macaddr.addr_bytes[4], dst_macaddr.addr_bytes[5]);
-					#endif
-
-					ipv4_hdr = (struct rte_ipv4_hdr *)((uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr));
-					int hdr_len = (ipv4_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) * RTE_IPV4_IHL_MULTIPLIER;
-
-					if (hdr_len == sizeof(struct rte_ipv4_hdr)) {
-						packet_type |= RTE_PTYPE_L3_IPV4;
-
-						temp_ipv4_addr = ipv4_hdr->src_addr;
-						ipv4_hdr->src_addr = ipv4_hdr->dst_addr;
-						ipv4_hdr->dst_addr = temp_ipv4_addr;
-						// for checksum re-calculation!
-						ipv4_hdr->hdr_checksum = 0;
-						
-						#ifdef PACKET_DEBUG_PRINTOUT
-						src_ipaddr = rte_be_to_cpu_32(ipv4_hdr->src_addr);
-						dst_ipaddr = rte_be_to_cpu_32(ipv4_hdr->dst_addr);
-						uint8_t src_addr[4];
-						src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
-						src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
-						src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
-						src_addr[3] = (uint8_t) src_ipaddr & 0xff;
-						printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
-								src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
-
-						uint8_t dst_addr[4];
-						dst_addr[0] = (uint8_t) (dst_ipaddr >> 24) & 0xff;
-						dst_addr[1] = (uint8_t) (dst_ipaddr >> 16) & 0xff;
-						dst_addr[2] = (uint8_t) (dst_ipaddr >> 8) & 0xff;
-						dst_addr[3] = (uint8_t) dst_ipaddr & 0xff;
-						printf("dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
-							dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
-						#endif		
-
-						if (ipv4_hdr->next_proto_id == IPPROTO_UDP){
-							packet_type |= RTE_PTYPE_L4_UDP;
-							ipv4_udp_rx++;
-							printf("ipv4_udp_rx:%" PRIu16 "\n",ipv4_udp_rx);
-
-							udp_hdr = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
-							temp_udp_port = udp_hdr->src_port;
-							udp_hdr->src_port = udp_hdr->dst_port; 
-							udp_hdr->dst_port = temp_udp_port;							
-							udp_hdr->dgram_len = rte_cpu_to_be_16(sizeof(struct alt_header) + sizeof(struct rte_udp_hdr));
-
-							alt = (struct alt_header *)((uint8_t *)udp_hdr + sizeof(struct rte_udp_hdr));
-							#ifdef PACKET_DEBUG_PRINTOUT
-							dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
-							src_port = rte_be_to_cpu_16(udp_hdr->src_port);
-							//Because of the way we fill in these data, we don't need rte_be_to_cpu_32 or rte_be_to_cpu_16 
-							uint32_t req_id = alt->request_id;
-							uint16_t service_id = alt->service_id;
-							printf("src_port:%" PRIu16 ", dst_port:%" PRIu16 "\n", src_port, dst_port);
-							printf("service_id:%" PRIu16 "req_id:%" PRIu32 "\n", service_id, req_id);
-							printf("-------------------\n");
-							#endif
-
-							udp_hdr->dgram_cksum = 0;									
-							udp_hdr->dgram_cksum = rte_ipv4_udptcp_cksum(ipv4_hdr, (void*)udp_hdr);
-						}
-						ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
-					} 
-					else{
-						packet_type |= RTE_PTYPE_L3_IPV4_EXT;
-					}
-					//rte_pktmbuf_free(rx_pkts[i]);
-				}
-				else{
-					printf("type: %x \n", eth_hdr->ether_type);
+				if (unlikely(eth_hdr == NULL)) {
+					log_printf(DEBUG, "ether header not the correct format dropping packet\n");
 					rte_pktmbuf_free(rx_pkts[i]);
+					continue;
 				}
-				//rte_pktmbuf_free(rx_pkts[i]);				
+
+				ipv4_hdr = ipv4_hdr_process(eth_hdr);
+
+				if (unlikely(ipv4_hdr == NULL)) {
+					log_printf(DEBUG, "ipv4 header not the correct format dropping packet\n");
+					rte_pktmbuf_free(rx_pkts[i]);
+					continue;
+				}
+
+				udp_hdr = udp_hdr_process(ipv4_hdr);
+
+				if (unlikely(udp_hdr == NULL)) {
+					log_printf(DEBUG, "udp header not the correct format dropping packet\n");
+					rte_pktmbuf_free(rx_pkts[i]);
+					continue;
+				}
+
+
+				//this must be recomputed if the packet is changed
+				//ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
+				//rte_pktmbuf_free(rx_pkts[i]);
 			}							
-			printf("rx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, ipv4_udp_rx);	
+			log_printf(INFO,"rx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, ipv4_udp_rx);	
 
 			/* Send burst of TX packets, to the same port */
-			//const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
+			const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
 			//printf("rx:%" PRIu16 ",tx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, nb_tx, ipv4_udp_rx);
 			//printf("rx:%" PRIu16 ",tx:%" PRIu16 "\n",nb_rx, nb_tx);
 
-			// // /* Free any unsent packets. */
-			// if (unlikely(nb_tx < nb_rx)) {
-			// 	uint16_t buf;
-			// 	for (buf = nb_tx; buf < nb_rx; buf++)
-			// 		rte_pktmbuf_free(rx_pkts[buf]);
-			// }
+			/* Free any unsent packets. */
+			 if (unlikely(nb_tx < nb_rx)) {
+				log_printf(DEBUG, "Freeing packets that were not sent %d",nb_rx - nb_tx);
+			 	uint16_t buf;
+			 	for (buf = nb_tx; buf < nb_rx; buf++)
+			 		rte_pktmbuf_free(rx_pkts[buf]);
+			 }
 		}
 	}
 }
