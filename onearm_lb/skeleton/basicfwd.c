@@ -16,6 +16,69 @@
 #include "basicfwd.h"
 #include "alt_header.h"
 #include "packets.h"
+#include "clover_structs.h"
+
+
+#define RC_SEND 0x04
+#define RC_WRITE_ONLY 0x0A
+#define RC_READ_REQUEST 0x0C
+#define RC_READ_RESPONSE 0x10
+#define RC_ACK 0x11
+
+char ib_print[256][256];
+
+#define RDMA_CALL_SIZE 8192
+uint8_t rdma_calls[RDMA_CALL_SIZE];
+static int rdma_counter = 0;
+
+void print_u64_bytes(uint64_t val) {
+	uint8_t vals[8];
+	for(int i=0;i<8;i++) {
+		vals[i] = (val >> (i * 8)) & 0xFF;
+	}
+	printf("%"PRIu64" [%02X %02X %02X %02X %02X %02X %02X %02X]",val, vals[7], vals[6], vals[5], vals[4], vals[3], vals[2], vals[1], vals[0]);
+	return;
+}
+
+void rdma_count(roce_v2_header * rdma) {
+	if (likely(rdma_counter < RDMA_CALL_SIZE)) {
+		rdma_calls[rdma_counter++]=rdma->opcode;
+	} else {
+		#define LINE_LEN 10
+		int t=0;
+		for (int i=0;i<RDMA_CALL_SIZE;i+=LINE_LEN) {
+			for (int j=0;j<LINE_LEN;j++) {
+				switch(rdma_calls[t]){
+					case RC_SEND: 
+						printf("m");
+						break;
+					case RC_WRITE_ONLY: 
+						printf("W");
+						break;
+					case RC_ACK: break;
+						break;
+					default:
+						break;
+				}
+				t++;
+			}
+			printf("\n");
+		}
+		exit(0);
+	}
+	return;
+}
+
+
+
+//ib_print[RC_ACK] = "RC_ACK\0";
+void init_ib_words() {
+	strcpy(ib_print[RC_SEND],"RC_SEND");
+	strcpy(ib_print[RC_WRITE_ONLY],"RC_WRITE_ONLY");
+	strcpy(ib_print[RC_READ_REQUEST],"RC_READ_REQUEST");
+	strcpy(ib_print[RC_READ_RESPONSE],"RC_READ_RESPONSE");
+	strcpy(ib_print[RC_ACK],"RC_ACK");
+}
 
 
 int log_printf(int level, const char *format, ...) {
@@ -120,6 +183,30 @@ port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	return 0;
 }
 
+void print_raw(struct rte_mbuf* pkt){
+	printf("\n\n\n\n----(start-raw) (new packet)\n\n");
+	int room = rte_pktmbuf_headroom(pkt);
+	for (int i=rte_pktmbuf_headroom(pkt);(uint16_t)i<(pkt->data_len + rte_pktmbuf_headroom(pkt));i++){
+		printf("%02X ",(uint8_t)((char *)(pkt->buf_addr))[i]);
+		if (i - room == sizeof(struct rte_ether_hdr) - 1) { // eth
+			printf("|\n");
+		}
+		if (i - room == sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) - 1) { // eth
+			printf("|\n");
+		}
+		if (i  - room == sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr) - 1) { // eth
+			printf("|\n");
+		}
+		if (i  - room == sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr) + sizeof(struct roce_v2_header) - 1) { // eth
+			printf("|\n");
+		}
+		if (i  - room == sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr) + sizeof(struct roce_v2_header) + sizeof(struct mitsume_msg_header) -1 ) {
+			printf("|\n");
+		}
+		//printf("%c-",((char *)pkt->userdata)[itter]);
+	}
+	printf("\n----(end-raw)----\n");
+}
 
 struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
 	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
@@ -134,6 +221,8 @@ struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
 		#endif
 
 		#ifdef PACKET_DEBUG_PRINTOUT
+
+		print_raw(buf);
 		// L2 headers
 		struct rte_ether_addr src_macaddr;
 		struct rte_ether_addr dst_macaddr;	
@@ -155,7 +244,6 @@ struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
 		return eth_hdr;
 	}
 	return NULL;
-
 }
 
 struct rte_ipv4_hdr* ipv4_hdr_process(struct rte_ether_hdr *eth_hdr) {
@@ -226,10 +314,7 @@ struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
 		dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
 		src_port = rte_be_to_cpu_16(udp_hdr->src_port);
 		//Because of the way we fill in these data, we don't need rte_be_to_cpu_32 or rte_be_to_cpu_16 
-		uint32_t req_id = alt->request_id;
-		uint16_t service_id = alt->service_id;
 		printf("src_port:%" PRIu16 ", dst_port:%" PRIu16 "\n", src_port, dst_port);
-		printf("service_id:%" PRIu16 "req_id:%" PRIu32 "\n", service_id, req_id);
 		printf("-------------------\n");
 		#endif
 
@@ -239,6 +324,90 @@ struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
 		return udp_hdr;
 	}
 	return NULL;
+}
+
+void print_roce_v2_header(roce_v2_header * rh) {
+    printf("op code             %02X %s\n",rh->opcode, ib_print[rh->opcode]);
+    printf("solicited event     %01X\n",rh->solicited_event);
+    printf("migration request   %01X\n",rh->migration_request);
+    printf("pad count           %01X\n",rh->pad_count);
+    printf("transport version   %01X\n",rh->transport_header_version);
+    printf("partition key       %02X\n",rh->partition_key);
+    printf("fecn                %01X\n",rh->fecn);
+    printf("becn                %01X\n",rh->bcen);
+    printf("reserved            %01X\n",rh->reserved);
+    printf("dest qp             %02X\n",rh->dest_qp);
+    printf("ack                 %01X\n",rh->ack);
+    printf("reserved            %01X\n",rh->reserved);
+    printf("packet sequence #   %02X\n",rh->packet_sequence_number);
+    //printf("padding             %02X\n",rh->padding);
+    //printf("ICRC                %01X\n",rh->ICRC);
+}
+
+struct roce_v2_header * roce_hdr_process(struct rte_udp_hdr * udp_hdr) {
+	//Dont start parsing if the udp port is not roce
+	struct roce_v2_header * roce_hdr = NULL;
+	if (likely(rte_be_to_cpu_16(udp_hdr->dst_port) == ROCE_PORT)) {
+		roce_hdr = (struct roce_v2_header *)((uint8_t*)udp_hdr + sizeof(struct rte_udp_hdr));
+
+		#ifdef PACKET_DEBUG_PRINTOUT
+		print_roce_v2_header(roce_hdr);
+		#endif
+
+		//rdma_count(roce_hdr);
+
+		return roce_hdr;
+	}
+	return NULL;
+}
+
+struct mitsume_msg * mitsume_msg_process(struct roce_v2_header * roce_hdr){
+
+	struct clover_hdr * clover_header;
+	struct mitsume_msg * clover_msg;
+	clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
+	clover_msg = &(clover_header->mitsume_hdr);
+
+	struct mitsume_msg_header *header = &(clover_msg->msg_header);
+
+	#ifdef PACKET_DEBUG_PRINTOUT
+		printf("-----------------------------------------\n");
+		printf("size of rocev2 header = %ld\n",sizeof(struct roce_v2_header));
+		printf("CLOVER MESSAGE TIME\n");
+
+		printf("((potential first 8 byte addr",clover_header->ptr.pointer);
+		print_u64_bytes(clover_header->ptr.pointer);
+		printf("\n");
+
+		printf("msg-type  %d ntohl %d\n",header->type,ntohl(header->type));
+		printf("source id %d ntohl %d\n",header->src_id,ntohl(header->src_id));
+		printf("dest id %d ntohl %d\n",header->des_id,ntohl(header->des_id));
+		printf("thread id %d ntohl %d \n",header->thread_id, ntohl(header->thread_id));
+
+		printf("(ib_mr_attr) -- Addr");
+		print_u64_bytes(header->reply_attr.addr);
+		printf("\n");
+
+		printf("(ib_mr_attr) -- rkey %d\n",ntohl(header->reply_attr.rkey));
+		printf("(ib_mr_attr) -- mac id %d\n",ntohs(header->reply_attr.machine_id));
+	#endif 
+
+
+
+	if (roce_hdr->opcode == RC_READ_REQUEST) {
+		printf("Reading from location ");
+		print_u64_bytes(clover_header->ptr.pointer);
+		printf("\n");
+
+		uint8_t val[4];
+		val[0] = clover_header->ptr.pointer >> 16 & 0xFF;
+		val[1] = clover_header->ptr.pointer >> 24 & 0xFF;
+		val[2] = clover_header->ptr.pointer >> 32 & 0xFF;
+		val[4] = clover_header->ptr.pointer >> 40 & 0xFF;
+
+		printf("addr? %d\n", *((uint32_t*)val));
+	}
+	return clover_msg;
 }
 
 /*
@@ -287,13 +456,14 @@ lcore_main(void)
 				struct rte_ether_hdr* eth_hdr;
 				struct rte_ipv4_hdr *ipv4_hdr; 
 				struct rte_udp_hdr* udp_hdr;
+				struct roce_v2_header * roce_hdr;
+				struct mitsume_msg * clover_msg;
 				
 
 				#ifdef PACKET_DEBUG_PRINTOUT	
 				#endif
 
 				eth_hdr = eth_hdr_process(rx_pkts[i]);
-
 				if (unlikely(eth_hdr == NULL)) {
 					log_printf(DEBUG, "ether header not the correct format dropping packet\n");
 					rte_pktmbuf_free(rx_pkts[i]);
@@ -301,13 +471,11 @@ lcore_main(void)
 				}
 
 				ipv4_hdr = ipv4_hdr_process(eth_hdr);
-
 				if (unlikely(ipv4_hdr == NULL)) {
 					log_printf(DEBUG, "ipv4 header not the correct format dropping packet\n");
 					rte_pktmbuf_free(rx_pkts[i]);
 					continue;
 				}
-
 				udp_hdr = udp_hdr_process(ipv4_hdr);
 
 				if (unlikely(udp_hdr == NULL)) {
@@ -316,6 +484,19 @@ lcore_main(void)
 					continue;
 				}
 
+				roce_hdr = roce_hdr_process(udp_hdr);
+				if (unlikely(roce_hdr == NULL)) {
+					log_printf(DEBUG, "roceV2 header not correct dropping packet\n");
+					rte_pktmbuf_free(rx_pkts[i]);
+					continue;
+				}
+
+				clover_msg = mitsume_msg_process(roce_hdr);
+				if (unlikely(clover_msg == NULL)) {
+					log_printf(DEBUG, "clover msg not parsable for some reason\n");
+					rte_pktmbuf_free(rx_pkts[i]);
+					continue;
+				}
 
 				//this must be recomputed if the packet is changed
 				//ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
@@ -383,6 +564,7 @@ main(int argc, char *argv[])
 	printf("Running on #%d cores\n",rte_lcore_count());
 
 
+	init_ib_words();
 	/* Call lcore_main on the master core only. */
 	lcore_main();
 

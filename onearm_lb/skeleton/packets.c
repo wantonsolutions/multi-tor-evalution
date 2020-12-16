@@ -55,23 +55,6 @@ void print_udp_header(udp_header *udp) {
 
 }
 
-void print_roce_v2_header(roce_v2_header * rh) {
-    printf("op code             %02X\n",rh->opcode);
-    printf("solicited event     %01X\n",rh->solicited_event);
-    printf("migration request   %01X\n",rh->migration_request);
-    printf("pad count           %01X\n",rh->pad_count);
-    printf("transport version   %01X\n",rh->transport_header_version);
-    printf("partition key       %02X\n",rh->partition_key);
-    //printf("fecn                %01X\n",rh->fecn);
-    //printf("becn                %01X\n",rh->bcen);
-    //printf("reserved            %01X\n",rh->reserved);
-    printf("dest qp             %02X\n",rh->dest_qp);
-    printf("ack                 %01X\n",rh->ack);
-    printf("reserved            %01X\n",rh->reserved);
-    printf("packet sequence #   %02X\n",rh->packet_sequence_number);
-    printf("padding             %02X\n",rh->padding);
-    printf("ICRC                %01X\n",rh->ICRC);
-}
 
 void print_whole_packet(agg_header * header) {
     printf("---------ETH-----------\n");

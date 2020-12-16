@@ -2,8 +2,8 @@
 #define BASIC_FWD_H
 
 
-//#define PACKET_DEBUG_PRINTOUT 1
-//#define TURN_PACKET_AROUND 1
+#define PACKET_DEBUG_PRINTOUT
+//#define TURN_PACKET_AROUND
 
 #define DEBUG 2
 #define INFO 1
@@ -19,12 +19,16 @@
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 32
 
+//nessisary ib verbs
+
 
 int log_printf(int level, const char *format, ...);
 
 struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf);
 struct rte_ipv4_hdr* ipv4_hdr_process(struct rte_ether_hdr *eth_hdr);
 struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr);
+struct roce_v2_header * roce_hdr_process(struct rte_udp_hdr * udp_hdr);
+//struct mitsume_msg * mitsume_msg_process(struct roce_v2_header * roce_hdr);
 
 
 

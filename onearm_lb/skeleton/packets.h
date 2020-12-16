@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <rte_mbuf.h>
+#include "clover_structs.h"
 
 typedef struct __attribute__ ((__packed__)) ether_header
 {
@@ -56,22 +57,20 @@ typedef struct __attribute__ ((__packed__)) roce_v2_header {
     unsigned int pad_count:2;
     unsigned int transport_header_version:4;
     uint16_t partition_key;
-    //unsigned int fecn:1;
-    //unsigned int bcen:1;
-    //unsigned int reserverd:6;
+    //Reserved
+    unsigned int fecn:1;
+    unsigned int bcen:1;
+    unsigned int reserverd:6;
+    //end reserved
     unsigned int dest_qp:24;
     unsigned int ack:1;
     unsigned int reserved:7;
     unsigned int packet_sequence_number:24;
     unsigned int padding:16;
-    unsigned int ICRC:4;
+    //unsigned int stew_pad:8; // TODO FIGURE OUT WHAT THE HELL THIS IS!!!
+    //unsigned int ICRC:4;
 } roce_v2_header;
 
-
-
-typedef struct clover_header {
-    int not_implemented;
-} clover_header;
 
 typedef struct __attribute__ ((__packed__)) agg_header {
     ether_header eth;
@@ -80,6 +79,10 @@ typedef struct __attribute__ ((__packed__)) agg_header {
     roce_v2_header roce;
 } agg_header;
 
+typedef struct clover_hdr {
+  struct mitsume_ptr ptr;
+  struct mitsume_msg mitsume_hdr;
+} clover_hdr;
 
 void print_whole_packet(agg_header * header);
 void print_eth_header(ether_header *eth);
