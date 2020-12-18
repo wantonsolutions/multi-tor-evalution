@@ -52,14 +52,14 @@ uint32_t read_resp_addr_count[KEYSPACE];
 
 void count_values(uint64_t *index, uint32_t *count, uint32_t size, uint64_t value) {
 	//search
-	for (int i=0;i<size;i++) {
+	for (uint32_t i=0;i<size;i++) {
 		if(index[i] == value) {
 			count[i]++;
 			return;
 		}
 	}
 	//add new index
-	for (int i=0;i<size;i++) {
+	for (uint32_t i=0;i<size;i++) {
 		if(index[i] == 0) {
 			index[i]=value;
 			count[i]=1;
@@ -69,10 +69,10 @@ void count_values(uint64_t *index, uint32_t *count, uint32_t size, uint64_t valu
 }
 
 void print_count(uint64_t *index, uint32_t *count, uint32_t size) {
-	for (int i=0;i<size;i++) {
+	for (uint32_t i=0;i<size;i++) {
 		if (index[i] != 0) {
 			printf("Index: ");
-			print_bytes(&index[i],sizeof(uint64_t));
+			print_bytes((uint8_t *)&index[i],sizeof(uint64_t));
 			printf(" Count: %d\n",count[i]);
 		}
 	}
@@ -111,16 +111,15 @@ void classify_packet_size(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce) 
 
 
 void print_bytes(const uint8_t * buf, uint32_t len) {
-	for (int i=0;i<len;i++)  {
+	for (uint32_t i=0;i<len;i++)  {
 		printf("%02X ", buf[i]);
 	}
 }
 
 
 void print_ib_mr(struct ib_mr_attr * mr) {
-		uint8_t address[sizeof(uint64_t)];
 		printf("address: ");
-		for (int i=0;i<sizeof(uint64_t);i++) {
+		for (uint32_t i=0;i<sizeof(uint64_t);i++) {
 			printf("%02X", *((uint8_t*)(&(mr->addr)) + i));
 		}
 		printf("\n");
@@ -134,7 +133,6 @@ void print_read_request(struct read_request* rr) {
 	print_bytes((void*) rr, 14);
 	printf("\n");
 
-	uint8_t address[sizeof(uint64_t)];
 	printf("address: ");
 	print_bytes((uint8_t *)&(rr->addr),sizeof(uint64_t));
 	printf("\n");
@@ -160,12 +158,19 @@ void print_write_request(struct write_request* wr) {
 	return;
 }
 
-void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct clover_hdr * clover) {
-	uint32_t size = ntohs(ip->total_length);
-	uint8_t opcode = roce->opcode;
+void true_classify(struct rte_mbuf * pkt) {
+//void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct clover_hdr * clover) {
+	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
+	struct rte_ipv4_hdr* ipv4_hdr = (struct rte_ipv4_hdr *)((uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr));
+	struct rte_udp_hdr * udp_hdr = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
+	struct roce_v2_header * roce_hdr = (struct roce_v2_header *)((uint8_t*)udp_hdr + sizeof(struct rte_udp_hdr));
+	struct clover_hdr * clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
+
+	uint32_t size = ntohs(ipv4_hdr->total_length);
+	uint8_t opcode = roce_hdr->opcode;
 
 	if (size == 60 && opcode == RC_READ_REQUEST) {
-		struct read_request * rr = (struct read_request *)clover;
+		struct read_request * rr = (struct read_request *)clover_header;
 		print_read_request(rr);
 		count_read_req_addr(rr);
 	}
@@ -173,7 +178,7 @@ void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct 
 
 	if (size == 1072 && opcode == RC_READ_RESPONSE) {
 	//if ((size == 56 || size == 1072) && opcode == RC_READ_RESPONSE) {
-		struct read_response * rr = (struct read_response*) clover;
+		struct read_response * rr = (struct read_response*) clover_header;
 		print_read_response(rr, size);
 		//count_read_resp_addr(rr);
 	}
@@ -187,11 +192,11 @@ void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct 
 }
 
 
-void print_classify_packet_size() {
+void print_classify_packet_size(void) {
 	for (int i=0;i<RDMA_COUNTER_SIZE;i++) {
 		for (int j=0;j<PACKET_SIZES;j++) {
 			if(packet_size_index[i][j] != 0)
-				printf("Call: %s Size: %d, calls: %d\n",ib_print[i],packet_size_index[i][j],packet_size_calls[i][j]);
+				printf("Call: %s Size: %"PRIu64", calls: %d\n",ib_print[i],packet_size_index[i][j],packet_size_calls[i][j]);
 		}
 	}
 	printf("----------------------------\n");
@@ -204,7 +209,7 @@ void rdma_count_calls(roce_v2_header *rdma) {
 }
 
 
-void print_rdma_call_count() {
+void print_rdma_call_count(void) {
 	if (rdma_counter % 100 == 0) {
 		for (int i=0;i<RDMA_COUNTER_SIZE;i++) {
 			if (rdma_call_count[i] > 0) {
@@ -248,7 +253,7 @@ void rdma_print_pattern(roce_v2_header * rdma) {
 
 
 //ib_print[RC_ACK] = "RC_ACK\0";
-void init_ib_words() {
+void init_ib_words(void) {
 	strcpy(ib_print[RC_SEND],"RC_SEND");
 	strcpy(ib_print[RC_WRITE_ONLY],"RC_WRITE_ONLY");
 	strcpy(ib_print[RC_READ_REQUEST],"RC_READ_REQUEST");
@@ -431,7 +436,7 @@ struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
 	return NULL;
 }
 
-void print_ipv4_hdr(struct rte_ipv4_hdr * ipv4_hdr) {
+void print_ip_hdr(struct rte_ipv4_hdr * ipv4_hdr) {
 	// L3 headers: IPv4
 	uint32_t dst_ipaddr;
 	uint32_t src_ipaddr;
@@ -511,9 +516,7 @@ struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
 		#endif
 
 		#ifdef PACKET_DEBUG_PRINTOUT
-
 		print_udp_hdr(udp_hdr);
-
 		#endif
 
 		//udp_hdr->dgram_cksum = 0;									
@@ -524,7 +527,7 @@ struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
 	return NULL;
 }
 
-void print_roce_v2_header(roce_v2_header * rh) {
+void print_roce_v2_hdr(roce_v2_header * rh) {
     printf("op code             %02X %s\n",rh->opcode, ib_print[rh->opcode]);
     printf("solicited event     %01X\n",rh->solicited_event);
     printf("migration request   %01X\n",rh->migration_request);
@@ -568,7 +571,7 @@ void print_clover_hdr(struct clover_hdr * clover_header) {
 		printf("size of rocev2 header = %ld\n",sizeof(struct roce_v2_header));
 		printf("CLOVER MESSAGE TIME\n");
 
-		printf("((potential first 8 byte addr",clover_header->ptr.pointer);
+		printf("((potential first 8 byte addr ");
 		print_bytes((uint8_t *)&clover_header->ptr.pointer, sizeof(uint64_t));
 		printf("\n");
 
@@ -592,15 +595,27 @@ void print_clover_hdr(struct clover_hdr * clover_header) {
 
 struct clover_hdr * mitsume_msg_process(struct roce_v2_header * roce_hdr){
 
-	struct clover_hdr * clover_header;
-	clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
+	struct clover_hdr * clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
 
 	#ifdef PACKET_DEBUG_PRINTOUT
-	print_clover_hdr(clover_hdr);
+	print_clover_header(clover_hdr);
 	#endif 
 
-
 	return clover_header;
+}
+
+void print_packet(struct rte_mbuf * buf) {
+	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
+	struct rte_ipv4_hdr* ipv4_hdr = (struct rte_ipv4_hdr *)((uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr));
+	struct rte_udp_hdr * udp_hdr = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
+	struct roce_v2_header * roce_hdr = (struct roce_v2_header *)((uint8_t*)udp_hdr + sizeof(struct rte_udp_hdr));
+	struct clover_hdr * clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
+	print_ether_hdr(eth_hdr);
+	print_ip_hdr(ipv4_hdr);
+	print_udp_hdr(udp_hdr);
+	print_roce_v2_hdr(roce_hdr);
+	print_clover_hdr(clover_header);
+
 }
 
 /*
@@ -650,7 +665,7 @@ lcore_main(void)
 				struct rte_ipv4_hdr *ipv4_hdr; 
 				struct rte_udp_hdr* udp_hdr;
 				struct roce_v2_header * roce_hdr;
-				struct mitsume_msg * clover_msg;
+				struct clover_hdr * clover_header;
 				
 
 				#ifdef PACKET_DEBUG_PRINTOUT	
@@ -686,8 +701,8 @@ lcore_main(void)
 					continue;
 				}
 
-				clover_msg = mitsume_msg_process(roce_hdr);
-				if (unlikely(clover_msg == NULL)) {
+				clover_header = mitsume_msg_process(roce_hdr);
+				if (unlikely(clover_header == NULL)) {
 					log_printf(DEBUG, "clover msg not parsable for some reason\n");
 					rte_pktmbuf_free(rx_pkts[i]);
 					continue;
@@ -699,7 +714,7 @@ lcore_main(void)
 				}
 
 
-				true_classify(ipv4_hdr, roce_hdr, clover_msg);
+				true_classify(rx_pkts[i]);
 
 				//this must be recomputed if the packet is changed
 				//ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);

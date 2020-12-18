@@ -55,7 +55,7 @@ void print_udp_header(udp_header *udp) {
 
 }
 
-
+/*
 void print_whole_packet(agg_header * header) {
     printf("---------ETH-----------\n");
     print_eth_header(&(header->eth));
@@ -66,4 +66,4 @@ void print_whole_packet(agg_header * header) {
     printf("---------RoCE-----------\n");
     print_roce_v2_header(&(header->roce));
     printf("only printing up to UDP header\n");
-}
+}*/
