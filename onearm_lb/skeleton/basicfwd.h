@@ -2,7 +2,7 @@
 #define BASIC_FWD_H
 
 
-#define PACKET_DEBUG_PRINTOUT
+//#define PACKET_DEBUG_PRINTOUT
 //#define TURN_PACKET_AROUND
 
 #define DEBUG 2

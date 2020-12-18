@@ -24,30 +24,206 @@
 #define RC_READ_REQUEST 0x0C
 #define RC_READ_RESPONSE 0x10
 #define RC_ACK 0x11
+#define RC_ATOMIC_ACK 0x12
+#define RC_CNS 0x13
 
-char ib_print[256][256];
+#define RDMA_COUNTER_SIZE 256
+#define RDMA_STRING_NAME_LEN 256
+#define PACKET_SIZES 256
+
+char ib_print[RDMA_COUNTER_SIZE][RDMA_STRING_NAME_LEN];
 
 #define RDMA_CALL_SIZE 8192
-uint8_t rdma_calls[RDMA_CALL_SIZE];
 static int rdma_counter = 0;
+uint8_t rdma_calls[RDMA_CALL_SIZE];
+uint32_t rdma_call_count[RDMA_COUNTER_SIZE];
 
-void print_u64_bytes(uint64_t val) {
-	uint8_t vals[8];
-	for(int i=0;i<8;i++) {
-		vals[i] = (val >> (i * 8)) & 0xFF;
+
+static int packet_counter = 0;
+uint64_t packet_size_index[RDMA_COUNTER_SIZE][PACKET_SIZES];
+uint32_t packet_size_calls[RDMA_COUNTER_SIZE][PACKET_SIZES];
+
+#define KEYSPACE 1000000
+uint64_t read_req_addr_index[KEYSPACE];
+uint32_t read_req_addr_count[KEYSPACE];
+
+uint64_t read_resp_addr_index[KEYSPACE];
+uint32_t read_resp_addr_count[KEYSPACE];
+
+void count_values(uint64_t *index, uint32_t *count, uint32_t size, uint64_t value) {
+	//search
+	for (int i=0;i<size;i++) {
+		if(index[i] == value) {
+			count[i]++;
+			return;
+		}
 	}
-	printf("%"PRIu64" [%02X %02X %02X %02X %02X %02X %02X %02X]",val, vals[7], vals[6], vals[5], vals[4], vals[3], vals[2], vals[1], vals[0]);
+	//add new index
+	for (int i=0;i<size;i++) {
+		if(index[i] == 0) {
+			index[i]=value;
+			count[i]=1;
+			return;
+		}
+	}
+}
+
+void print_count(uint64_t *index, uint32_t *count, uint32_t size) {
+	for (int i=0;i<size;i++) {
+		if (index[i] != 0) {
+			printf("Index: ");
+			print_bytes(&index[i],sizeof(uint64_t));
+			printf(" Count: %d\n",count[i]);
+		}
+	}
+
+}
+
+void count_read_req_addr(struct read_request * rr) {
+	count_values(read_req_addr_index,read_req_addr_count,KEYSPACE,rr->addr);
+}
+/*
+void count_read_resp_addr(struct read_response * rr) {
+	count_values(read_resp_addr_index,read_resp_addr_count,KEYSPACE,rr->addr);
+}*/
+
+void print_read_req_addr(void) {
+	print_count(read_req_addr_index,read_req_addr_count,KEYSPACE);
+}
+/*
+void print_read_resp_addr(void) {
+	print_count(read_resp_addr_index,read_resp_addr_count,KEYSPACE);
+}
+*/
+
+void classify_packet_size(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce) {
+	uint32_t size = ntohs(ip->total_length);
+	uint8_t opcode = roce->opcode;
+
+	if (packet_counter == 0) {
+		bzero(packet_size_index,RDMA_COUNTER_SIZE*PACKET_SIZES*sizeof(uint32_t));
+		bzero(packet_size_calls,RDMA_COUNTER_SIZE*PACKET_SIZES*sizeof(uint32_t));
+	}
+
+	count_values(packet_size_index[opcode],packet_size_calls[opcode], PACKET_SIZES, size);
+}
+
+
+
+void print_bytes(const uint8_t * buf, uint32_t len) {
+	for (int i=0;i<len;i++)  {
+		printf("%02X ", buf[i]);
+	}
+}
+
+
+void print_ib_mr(struct ib_mr_attr * mr) {
+		uint8_t address[sizeof(uint64_t)];
+		printf("address: ");
+		for (int i=0;i<sizeof(uint64_t);i++) {
+			printf("%02X", *((uint8_t*)(&(mr->addr)) + i));
+		}
+		printf("\n");
+		printf("remote key: %d (nh) %d\n", mr->rkey, ntohl(mr->rkey));
+		printf("machine id %d (nh) %d\n", mr->machine_id, ntohs(mr->machine_id));
+		return;
+}
+
+void print_read_request(struct read_request* rr) {
+	printf("(START) Read Request: ");
+	print_bytes((void*) rr, 14);
+	printf("\n");
+
+	uint8_t address[sizeof(uint64_t)];
+	printf("address: ");
+	print_bytes((uint8_t *)&(rr->addr),sizeof(uint64_t));
+	printf("\n");
+
+	printf("unknown: %d (nh) %d\n", rr->unknown, ntohl(rr->unknown));
+	printf("len %d (nh) %d\n", rr->len, ntohs(rr->len));
+	//printf("(STOP) Read Request\n");
 	return;
 }
 
-void rdma_count(roce_v2_header * rdma) {
+void print_read_response(struct read_response *rr, uint32_t size) {
+	printf("(START) Read Response (%d)\t",size);
+	print_bytes((uint8_t*) rr, 10);
+	printf("\n");
+	//printf("(STOP) Read Response\n");
+	return;
+}
+
+void print_write_request(struct write_request* wr) {
+	printf("(START) Write Request\n");
+	print_ib_mr(&wr->mr_attr);
+	printf("(STOP) Write Request\n");
+	return;
+}
+
+void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct clover_hdr * clover) {
+	uint32_t size = ntohs(ip->total_length);
+	uint8_t opcode = roce->opcode;
+
+	if (size == 60 && opcode == RC_READ_REQUEST) {
+		struct read_request * rr = (struct read_request *)clover;
+		print_read_request(rr);
+		count_read_req_addr(rr);
+	}
+
+
+	if (size == 1072 && opcode == RC_READ_RESPONSE) {
+	//if ((size == 56 || size == 1072) && opcode == RC_READ_RESPONSE) {
+		struct read_response * rr = (struct read_response*) clover;
+		print_read_response(rr, size);
+		//count_read_resp_addr(rr);
+	}
+
+
+	if (packet_counter % 10000 == 0) {
+		print_read_req_addr();
+		//print_read_resp_addr();
+	}
+	return;
+}
+
+
+void print_classify_packet_size() {
+	for (int i=0;i<RDMA_COUNTER_SIZE;i++) {
+		for (int j=0;j<PACKET_SIZES;j++) {
+			if(packet_size_index[i][j] != 0)
+				printf("Call: %s Size: %d, calls: %d\n",ib_print[i],packet_size_index[i][j],packet_size_calls[i][j]);
+		}
+	}
+	printf("----------------------------\n");
+}
+
+
+void rdma_count_calls(roce_v2_header *rdma) {
+	rdma_call_count[rdma->opcode]++;
+	return;
+}
+
+
+void print_rdma_call_count() {
+	if (rdma_counter % 100 == 0) {
+		for (int i=0;i<RDMA_COUNTER_SIZE;i++) {
+			if (rdma_call_count[i] > 0) {
+				printf("Call: %s Count: %d Raw: %02X\n",ib_print[i],rdma_call_count[i],i);
+			}
+		}
+	}
+	return;
+}
+
+//TODO remove this function, it's rather useless
+void rdma_print_pattern(roce_v2_header * rdma) {
 	if (likely(rdma_counter < RDMA_CALL_SIZE)) {
-		rdma_calls[rdma_counter++]=rdma->opcode;
+		rdma_calls[rdma_counter]=rdma->opcode;
 	} else {
 		#define LINE_LEN 10
-		int t=0;
+		uint32_t t=0;
 		for (int i=0;i<RDMA_CALL_SIZE;i+=LINE_LEN) {
-			for (int j=0;j<LINE_LEN;j++) {
+			for (int j=0;j<LINE_LEN && t < RDMA_CALL_SIZE;j++) {
 				switch(rdma_calls[t]){
 					case RC_SEND: 
 						printf("m");
@@ -78,6 +254,8 @@ void init_ib_words() {
 	strcpy(ib_print[RC_READ_REQUEST],"RC_READ_REQUEST");
 	strcpy(ib_print[RC_READ_RESPONSE],"RC_READ_RESPONSE");
 	strcpy(ib_print[RC_ACK],"RC_ACK");
+	strcpy(ib_print[RC_ATOMIC_ACK],"RC_ATOMIC_ACK");
+	strcpy(ib_print[RC_CNS],"RC_COMPARE_AND_SWAP");
 }
 
 
@@ -208,6 +386,28 @@ void print_raw(struct rte_mbuf* pkt){
 	printf("\n----(end-raw)----\n");
 }
 
+void print_ether_hdr(struct rte_ether_hdr * eth){
+	// L2 headers
+	struct rte_ether_addr src_macaddr;
+	struct rte_ether_addr dst_macaddr;	
+
+	src_macaddr = eth->s_addr;
+	dst_macaddr = eth->d_addr;
+	printf("src_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+		" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		src_macaddr.addr_bytes[0], src_macaddr.addr_bytes[1],
+		src_macaddr.addr_bytes[2], src_macaddr.addr_bytes[3],
+		src_macaddr.addr_bytes[4], src_macaddr.addr_bytes[5]);
+
+	printf("dst_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+		" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		dst_macaddr.addr_bytes[0], dst_macaddr.addr_bytes[1],
+		dst_macaddr.addr_bytes[2], dst_macaddr.addr_bytes[3],
+		dst_macaddr.addr_bytes[4], dst_macaddr.addr_bytes[5]);
+
+	return;
+}
+
 struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
 	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
 
@@ -222,28 +422,39 @@ struct rte_ether_hdr *eth_hdr_process(struct rte_mbuf* buf) {
 
 		#ifdef PACKET_DEBUG_PRINTOUT
 
+		print_ether_hdr(eth_hdr);
 		print_raw(buf);
-		// L2 headers
-		struct rte_ether_addr src_macaddr;
-		struct rte_ether_addr dst_macaddr;	
 
-		src_macaddr = eth_hdr->s_addr;
-		dst_macaddr = eth_hdr->d_addr;
-		printf("src_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-			src_macaddr.addr_bytes[0], src_macaddr.addr_bytes[1],
-			src_macaddr.addr_bytes[2], src_macaddr.addr_bytes[3],
-			src_macaddr.addr_bytes[4], src_macaddr.addr_bytes[5]);
-
-		printf("dst_macaddr: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-			dst_macaddr.addr_bytes[0], dst_macaddr.addr_bytes[1],
-			dst_macaddr.addr_bytes[2], dst_macaddr.addr_bytes[3],
-			dst_macaddr.addr_bytes[4], dst_macaddr.addr_bytes[5]);
 		#endif
 		return eth_hdr;
 	}
 	return NULL;
+}
+
+void print_ipv4_hdr(struct rte_ipv4_hdr * ipv4_hdr) {
+	// L3 headers: IPv4
+	uint32_t dst_ipaddr;
+	uint32_t src_ipaddr;
+
+	src_ipaddr = rte_be_to_cpu_32(ipv4_hdr->src_addr);
+	dst_ipaddr = rte_be_to_cpu_32(ipv4_hdr->dst_addr);
+	uint8_t src_addr[4];
+	src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
+	src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
+	src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
+	src_addr[3] = (uint8_t) src_ipaddr & 0xff;
+	printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
+			src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
+
+	uint8_t dst_addr[4];
+	dst_addr[0] = (uint8_t) (dst_ipaddr >> 24) & 0xff;
+	dst_addr[1] = (uint8_t) (dst_ipaddr >> 16) & 0xff;
+	dst_addr[2] = (uint8_t) (dst_ipaddr >> 8) & 0xff;
+	dst_addr[3] = (uint8_t) dst_ipaddr & 0xff;
+	printf("dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
+		dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
+	return;
+
 }
 
 struct rte_ipv4_hdr* ipv4_hdr_process(struct rte_ether_hdr *eth_hdr) {
@@ -261,32 +472,25 @@ struct rte_ipv4_hdr* ipv4_hdr_process(struct rte_ether_hdr *eth_hdr) {
 		#endif
 		
 		#ifdef PACKET_DEBUG_PRINTOUT
-		// L3 headers: IPv4
-		uint32_t dst_ipaddr;
-		uint32_t src_ipaddr;
-
-		src_ipaddr = rte_be_to_cpu_32(ipv4_hdr->src_addr);
-		dst_ipaddr = rte_be_to_cpu_32(ipv4_hdr->dst_addr);
-		uint8_t src_addr[4];
-		src_addr[0] = (uint8_t) (src_ipaddr >> 24) & 0xff;
-		src_addr[1] = (uint8_t) (src_ipaddr >> 16) & 0xff;
-		src_addr[2] = (uint8_t) (src_ipaddr >> 8) & 0xff;
-		src_addr[3] = (uint8_t) src_ipaddr & 0xff;
-		printf("src_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
-				src_addr[0], src_addr[1], src_addr[2], src_addr[3]);
-
-		uint8_t dst_addr[4];
-		dst_addr[0] = (uint8_t) (dst_ipaddr >> 24) & 0xff;
-		dst_addr[1] = (uint8_t) (dst_ipaddr >> 16) & 0xff;
-		dst_addr[2] = (uint8_t) (dst_ipaddr >> 8) & 0xff;
-		dst_addr[3] = (uint8_t) dst_ipaddr & 0xff;
-		printf("dst_addr: %" PRIu8 ".%" PRIu8 ".%" PRIu8 ".%" PRIu8 "\n", 
-			dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
+		print_ipv4_hdr(ipv4_hdr);
 		#endif		
 
 		return ipv4_hdr;
 	}
 	return NULL;
+}
+
+void print_udp_hdr(struct rte_udp_hdr * udp_hdr) {
+	// L4 headers: UDP 
+	uint16_t dst_port = 0;
+	uint16_t src_port = 0;
+	dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
+	src_port = rte_be_to_cpu_16(udp_hdr->src_port);
+	//Because of the way we fill in these data, we don't need rte_be_to_cpu_32 or rte_be_to_cpu_16 
+	printf("src_port:%" PRIu16 ", dst_port:%" PRIu16 "\n", src_port, dst_port);
+	printf("-------------------\n");
+	return;
+
 }
 
 struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
@@ -308,14 +512,8 @@ struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr) {
 
 		#ifdef PACKET_DEBUG_PRINTOUT
 
-		// L4 headers: UDP 
-		uint16_t dst_port = 0;
-		uint16_t src_port = 0;
-		dst_port = rte_be_to_cpu_16(udp_hdr->dst_port);
-		src_port = rte_be_to_cpu_16(udp_hdr->src_port);
-		//Because of the way we fill in these data, we don't need rte_be_to_cpu_32 or rte_be_to_cpu_16 
-		printf("src_port:%" PRIu16 ", dst_port:%" PRIu16 "\n", src_port, dst_port);
-		printf("-------------------\n");
+		print_udp_hdr(udp_hdr);
+
 		#endif
 
 		//udp_hdr->dgram_cksum = 0;									
@@ -350,34 +548,33 @@ struct roce_v2_header * roce_hdr_process(struct rte_udp_hdr * udp_hdr) {
 	if (likely(rte_be_to_cpu_16(udp_hdr->dst_port) == ROCE_PORT)) {
 		roce_hdr = (struct roce_v2_header *)((uint8_t*)udp_hdr + sizeof(struct rte_udp_hdr));
 
+		rdma_counter++;
+
 		#ifdef PACKET_DEBUG_PRINTOUT
 		print_roce_v2_header(roce_hdr);
 		#endif
 
 		//rdma_count(roce_hdr);
+		//rdma_count_calls(roce_hdr);
+		//print_rdma_call_count();
 
 		return roce_hdr;
 	}
 	return NULL;
 }
 
-struct mitsume_msg * mitsume_msg_process(struct roce_v2_header * roce_hdr){
-
-	struct clover_hdr * clover_header;
-	struct mitsume_msg * clover_msg;
-	clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
-	clover_msg = &(clover_header->mitsume_hdr);
-
-	struct mitsume_msg_header *header = &(clover_msg->msg_header);
-
-	#ifdef PACKET_DEBUG_PRINTOUT
+void print_clover_hdr(struct clover_hdr * clover_header) {
 		printf("-----------------------------------------\n");
 		printf("size of rocev2 header = %ld\n",sizeof(struct roce_v2_header));
 		printf("CLOVER MESSAGE TIME\n");
 
 		printf("((potential first 8 byte addr",clover_header->ptr.pointer);
-		print_u64_bytes(clover_header->ptr.pointer);
+		print_bytes((uint8_t *)&clover_header->ptr.pointer, sizeof(uint64_t));
 		printf("\n");
+
+		struct mitsume_msg * clover_msg;
+		clover_msg = &(clover_header->mitsume_hdr);
+		struct mitsume_msg_header *header = &(clover_msg->msg_header);
 
 		printf("msg-type  %d ntohl %d\n",header->type,ntohl(header->type));
 		printf("source id %d ntohl %d\n",header->src_id,ntohl(header->src_id));
@@ -385,29 +582,25 @@ struct mitsume_msg * mitsume_msg_process(struct roce_v2_header * roce_hdr){
 		printf("thread id %d ntohl %d \n",header->thread_id, ntohl(header->thread_id));
 
 		printf("(ib_mr_attr) -- Addr");
-		print_u64_bytes(header->reply_attr.addr);
+		print_bytes((uint8_t *) &header->reply_attr.addr, sizeof(uint64_t));
 		printf("\n");
 
 		printf("(ib_mr_attr) -- rkey %d\n",ntohl(header->reply_attr.rkey));
 		printf("(ib_mr_attr) -- mac id %d\n",ntohs(header->reply_attr.machine_id));
+
+}
+
+struct clover_hdr * mitsume_msg_process(struct roce_v2_header * roce_hdr){
+
+	struct clover_hdr * clover_header;
+	clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
+
+	#ifdef PACKET_DEBUG_PRINTOUT
+	print_clover_hdr(clover_hdr);
 	#endif 
 
 
-
-	if (roce_hdr->opcode == RC_READ_REQUEST) {
-		printf("Reading from location ");
-		print_u64_bytes(clover_header->ptr.pointer);
-		printf("\n");
-
-		uint8_t val[4];
-		val[0] = clover_header->ptr.pointer >> 16 & 0xFF;
-		val[1] = clover_header->ptr.pointer >> 24 & 0xFF;
-		val[2] = clover_header->ptr.pointer >> 32 & 0xFF;
-		val[4] = clover_header->ptr.pointer >> 40 & 0xFF;
-
-		printf("addr? %d\n", *((uint32_t*)val));
-	}
-	return clover_msg;
+	return clover_header;
 }
 
 /*
@@ -463,6 +656,8 @@ lcore_main(void)
 				#ifdef PACKET_DEBUG_PRINTOUT	
 				#endif
 
+				packet_counter++;
+
 				eth_hdr = eth_hdr_process(rx_pkts[i]);
 				if (unlikely(eth_hdr == NULL)) {
 					log_printf(DEBUG, "ether header not the correct format dropping packet\n");
@@ -497,6 +692,14 @@ lcore_main(void)
 					rte_pktmbuf_free(rx_pkts[i]);
 					continue;
 				}
+
+				classify_packet_size(ipv4_hdr,roce_hdr);
+				if (packet_counter % 1000000 == 0) {
+					print_classify_packet_size();
+				}
+
+
+				true_classify(ipv4_hdr, roce_hdr, clover_msg);
 
 				//this must be recomputed if the packet is changed
 				//ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);

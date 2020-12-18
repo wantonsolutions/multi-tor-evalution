@@ -8,11 +8,47 @@
 #define MITSUME_NUM_REPLICATION_BUCKET 1
 
 
+
 struct ib_mr_attr {
   uint64_t addr;
   uint32_t rkey;
   short machine_id;
 };
+
+struct read_request {
+  uint64_t addr;
+  uint32_t unknown;
+  uint16_t len;
+} read_request;
+
+#define READ_RESPONSE_HEADER_SIZE 10
+struct read_response {
+  /*attempt 0 */
+  //uint64_t addr;
+  //uint16_t padding_todo;
+  /*attempt 2*/
+  uint16_t seq_num;
+  int eight_ball:24;
+  uint8_t * data;
+
+} read_response;
+
+/*
+struct read_response {
+  union header {
+    uint8_t header_raw[READ_RESPONSE_HEADER_SIZE];
+    struct header_typed {
+      uint64_t addr;
+      short machine_id;
+    } header_typed;
+  } header;
+} read_response;
+*/
+
+struct write_request {
+  struct ib_mr_attr mr_attr;
+  uint64_t remainder;
+} write_request;
 
 typedef struct ib_mr_attr ptr_attr;
 
