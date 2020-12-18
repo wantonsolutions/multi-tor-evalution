@@ -17,6 +17,7 @@
 #include "alt_header.h"
 #include "packets.h"
 #include "clover_structs.h"
+#include <arpa/inet.h>
 
 
 #define RC_SEND 0x04
@@ -171,14 +172,16 @@ void true_classify(struct rte_mbuf * pkt) {
 
 	if (size == 60 && opcode == RC_READ_REQUEST) {
 		struct read_request * rr = (struct read_request *)clover_header;
+		print_packet(pkt);
 		print_read_request(rr);
 		count_read_req_addr(rr);
 	}
 
 
-	if (size == 1072 && opcode == RC_READ_RESPONSE) {
-	//if ((size == 56 || size == 1072) && opcode == RC_READ_RESPONSE) {
+	//if (size == 1072 && opcode == RC_READ_RESPONSE) {
+	if ((size == 56 || size == 1072) && opcode == RC_READ_RESPONSE) {
 		struct read_response * rr = (struct read_response*) clover_header;
+		print_packet(pkt);
 		print_read_response(rr, size);
 		//count_read_resp_addr(rr);
 	}
@@ -610,11 +613,12 @@ void print_packet(struct rte_mbuf * buf) {
 	struct rte_udp_hdr * udp_hdr = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
 	struct roce_v2_header * roce_hdr = (struct roce_v2_header *)((uint8_t*)udp_hdr + sizeof(struct rte_udp_hdr));
 	struct clover_hdr * clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
+	print_raw(buf);
 	print_ether_hdr(eth_hdr);
 	print_ip_hdr(ipv4_hdr);
 	print_udp_hdr(udp_hdr);
 	print_roce_v2_hdr(roce_hdr);
-	print_clover_hdr(clover_header);
+	//print_clover_hdr(clover_header);
 
 }
 
@@ -643,6 +647,11 @@ lcore_main(void)
 			rte_lcore_id());
 
 	/* Run until the application is quit or killed. */
+	struct rte_ether_hdr* eth_hdr;
+	struct rte_ipv4_hdr *ipv4_hdr; 
+	struct rte_udp_hdr* udp_hdr;
+	struct roce_v2_header * roce_hdr;
+	struct clover_hdr * clover_header;
 	for (;;) {
 		/*
 		 * Receive packets on a port and forward them on the paired
@@ -661,11 +670,6 @@ lcore_main(void)
 			log_printf(INFO,"rx:%" PRIu16 "\n",nb_rx);			
 
 			for (uint16_t i = 0; i < nb_rx; i++){
-				struct rte_ether_hdr* eth_hdr;
-				struct rte_ipv4_hdr *ipv4_hdr; 
-				struct rte_udp_hdr* udp_hdr;
-				struct roce_v2_header * roce_hdr;
-				struct clover_hdr * clover_header;
 				
 
 				#ifdef PACKET_DEBUG_PRINTOUT	
@@ -714,6 +718,7 @@ lcore_main(void)
 				}
 
 
+
 				true_classify(rx_pkts[i]);
 
 				//this must be recomputed if the packet is changed
@@ -723,6 +728,8 @@ lcore_main(void)
 			log_printf(INFO,"rx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, ipv4_udp_rx);	
 
 			/* Send burst of TX packets, to the same port */
+			const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
+			inet_pton(AF_INET,"127.0.0.1",&(ipv4_hdr->dst_addr));
 			const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
 			//printf("rx:%" PRIu16 ",tx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, nb_tx, ipv4_udp_rx);
 			//printf("rx:%" PRIu16 ",tx:%" PRIu16 "\n",nb_rx, nb_tx);

@@ -15,40 +15,68 @@ struct ib_mr_attr {
   short machine_id;
 };
 
+struct RTEH {
+  uint64_t vaddr;
+  uint32_t rkey;
+  uint32_t dma_length;
+} RTEH;
+
+struct AETH {
+  int reserved:1;
+  int opcode:2;
+  int credit_count:7;
+  int sequence_number:24;
+} AETH;
+
+struct AtomicETH {
+  uint64_t vaddr;
+  uint32_t rket;
+  uint64_t swap_or_add;
+  uint64_t compare;
+} AtomicETH;
+
+struct AtomicACKETH {
+  uint64_t original_remote_data;
+} AtomicACKETH;
+
+
 struct read_request {
-  uint64_t addr;
-  uint32_t unknown;
-  uint16_t len;
+  struct RTEH rdma_extended_header;
 } read_request;
 
-#define READ_RESPONSE_HEADER_SIZE 10
 struct read_response {
-  /*attempt 0 */
-  //uint64_t addr;
-  //uint16_t padding_todo;
-  /*attempt 2*/
-  uint16_t seq_num;
-  int eight_ball:24;
-  uint8_t * data;
-
+  struct AETH ack_extended;
+  uint64_t ptr;           //cursor probably
+  uint8_t * data;         //Might be null
 } read_response;
-
-/*
-struct read_response {
-  union header {
-    uint8_t header_raw[READ_RESPONSE_HEADER_SIZE];
-    struct header_typed {
-      uint64_t addr;
-      short machine_id;
-    } header_typed;
-  } header;
-} read_response;
-*/
 
 struct write_request {
-  struct ib_mr_attr mr_attr;
-  uint64_t remainder;
+  struct RTEH rdma_extended_header;
+  uint64_t ptr; //cursor probably
+  uint8_t *data;
 } write_request;
+
+struct rdma_ack {
+  struct AETH ack_extended;
+} rdma_ack;
+
+struct cs_request {
+  struct AtomicETH atomic_req;
+} cc_request;
+
+struct cs_response {
+  struct AETH ack_extended;
+  struct AtomicACKETH atomc_ack_extended;
+} cs_response;
+
+struct send_only {
+  uint8_t * data;
+} send_only;
+
+
+
+
+
 
 typedef struct ib_mr_attr ptr_attr;
 
