@@ -214,12 +214,11 @@ static uint32_t key_count[KEYSPACE];
 static int print_next = 0;
 static uint64_t last_cns = 0;
 static uint64_t last_write =0;
-
-static uint64_t first_address=0;
+static uint64_t first_write=0;
 static uint64_t first_cns=0;
 
-static uint64_t second_address=0;
-static uint64_t second_cns=0;
+static uint64_t predict_address=0;
+
 void true_classify(struct rte_mbuf * pkt) {
 //void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct clover_hdr * clover) {
 	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
@@ -243,7 +242,6 @@ void true_classify(struct rte_mbuf * pkt) {
 	//if (size == 1072 && opcode == RC_READ_RESPONSE) {
 	if ((size == 56 || size == 1072) && opcode == RC_READ_RESPONSE) {
 		struct read_response * rr = (struct read_response*) clover_header;
-
 		//print_packet(pkt);
 		//print_read_response(rr, size);
 		//count_read_resp_addr(rr);
@@ -261,90 +259,27 @@ void true_classify(struct rte_mbuf * pkt) {
 			print_next = 1;
 			uint64_t address = wr->rdma_extended_header.vaddr;
 
-			if(first_address != 0 && second_address == 0) {
-				second_address = be64toh(wr->rdma_extended_header.vaddr);
-			}
-
-			if(first_address==0) {
-				first_address = wr->rdma_extended_header.vaddr;
-			}
-
-
-			if (last_write !=0 && first_cns != 0) {
-				printf("first address ");
-				print_address(&first_address);
-				print_binary_address(&first_address);
-
-				printf("first cns ");
-				print_address(&first_cns);
-				print_binary_address(&first_cns);
-
-				/*
-				uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - first_address) >> 10) + first_cns;
-				printf("predict from not ");
-				predict_address = htobe64(predict_address);
-				print_address(&predict_address);
-				print_binary_address(&predict_address);
-				*/
-
-				printf("predict from not v2 ");
-				//uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_address)) >> 10) + be64toh(second_cns);
-				uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_address)) >> 10) + second_cns;
-				predict_address = htobe64(predict_address);
-				print_address(&predict_address);
-				print_binary_address(&predict_address);
-
-
-			}
-
-			if (last_write !=0 && second_cns != 0) {
-				printf("second address ");
-				uint64_t tmp_second_address = htobe64(second_address);
-				print_address(&tmp_second_address);
-				print_binary_address(&tmp_second_address);
-
-				printf("second cns ");
-				uint64_t tmp_second_cns = htobe64(second_cns);
-				print_address(&tmp_second_cns);
-				print_binary_address(&tmp_second_cns);
-
-
-				uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - second_address) >> 10) + second_cns;
-				printf("predict from not 2");
-				predict_address = htobe64(predict_address);
-				print_address(&predict_address);
-				print_binary_address(&predict_address);
-			}
-			//print_packet(pkt);
-
-			//printf("--------------write-------------\n");
-			//printf("write ");
-			//print_address(&address);
-
-			//printf("next pointer: ");
-			//print_address(&wr->ptr);
-			//printf("\n");
-
-			if (last_write != 0) {
-				uint64_t diff = be64toh(wr->rdma_extended_header.vaddr) - be64toh(last_write);
-				diff = htobe64(diff);
-				printf("last write diff ");
-				print_address(&diff);
-				print_binary_address(&diff);
-
-				//uint64_t predict_diff = diff >> 10;
-				printf("predict diff ");
-				uint64_t predict_diff = be64toh(diff) >> 10;
-				predict_diff = htobe64(predict_diff);
-				print_address(&predict_diff);
-				print_binary_address(&predict_diff);
-
+			if (last_write != 0 && last_cns != 0) {
 				printf("predict address ");
-				uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(last_write)) >> 10) + be64toh(last_cns);
-				predict_address = htobe64(predict_address);
+				predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(last_write)) >> 10) + be64toh(last_cns);
+				predict_address = htobe64( 0x00000000FFFFFF & predict_address); //clean and store
+
 				print_address(&predict_address);
 				print_binary_address(&predict_address);
+			} else {
+				printf("first write\n");
+				first_write = wr->rdma_extended_header.vaddr;
 			}
+
+			if(first_write != 0 && first_cns != 0) {
+				printf("predict from not addr");
+				predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write)) >> 10) + be64toh(first_cns);
+				predict_address = htobe64( 0x00000000FFFFFF & predict_address); //clean and store
+				print_address(&predict_address);
+				print_binary_address(&predict_address);
+
+			}
+
 			last_write = wr->rdma_extended_header.vaddr;
 
 			if (size >= 1084) {
@@ -378,46 +313,22 @@ void true_classify(struct rte_mbuf * pkt) {
 		//print_packet(pkt);
 		print_next = 0;
 		struct cs_request * cs = (struct cs_request*) clover_header;
-
-		//printf("-----------CNS---------------------\n");
-		//printf("vaddr ");
-		//print_address(&(cs->atomic_req.vaddr));
-
-		//((uint8_t*)(&cs->atomic_req.compare))[1] = 0x00;
-		//((uint8_t*)(&cs->atomic_req.compare))[2] = 0x07;
-		//((uint8_t*)(&cs->atomic_req.compare))[5] = 0x00;
-
-		//printf("compare ");
-		//print_address(&(cs->atomic_req.compare));
 		printf("swap_or_add ");
+
 		uint64_t swap = MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add));
 		swap = htobe64(swap);
 		print_address(&swap);
 		print_binary_address(&swap);
-		//printf("--o-- swap_or_add ");
-		//uint64_t oswap = cs->atomic_req.swap_or_add;
-		//print_address(&oswap);
-		//print_binary_address(&oswap);
 
 
-		if(second_cns==0 && first_cns!=0) {
-			second_cns = MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add));
-			first_cns = htobe64(MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add)));
+		if (swap != predict_address && last_cns != 0) {
+			printf("\n\n\n\nFAILURE FAILURE Address prediction incorrect\n\n\n");
 		}
 
-		if(first_cns==0) {
-			first_cns = htobe64(MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add)));
+		if (last_cns == 0) {
+			first_cns = swap;
 		}
 
-
-		if (last_cns != 0) {
-			printf("cns gap        ");
-			uint64_t diff = be64toh(swap) - be64toh(last_cns);
-			diff = htobe64(diff);
-			print_address(&diff);
-			print_binary_address(&diff);
-
-		}
 		last_cns = swap;
 		printf("\n");
 		//printf("rkey %d \n",&(cs->atomic_req.rkey));
