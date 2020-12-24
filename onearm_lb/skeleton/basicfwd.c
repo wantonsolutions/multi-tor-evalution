@@ -259,25 +259,20 @@ void true_classify(struct rte_mbuf * pkt) {
 			print_next = 1;
 			uint64_t address = wr->rdma_extended_header.vaddr;
 
-			if (last_write != 0 && last_cns != 0) {
-				printf("predict address ");
-				predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(last_write)) >> 10) + be64toh(last_cns);
-				predict_address = htobe64( 0x00000000FFFFFF & predict_address); //clean and store
-
-				print_address(&predict_address);
-				print_binary_address(&predict_address);
-			} else {
-				printf("first write\n");
-				first_write = wr->rdma_extended_header.vaddr;
-			}
 
 			if(first_write != 0 && first_cns != 0) {
-				printf("predict from not addr");
+				//printf("predict from not addr");
 				predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write)) >> 10) + be64toh(first_cns);
 				predict_address = htobe64( 0x00000000FFFFFF & predict_address); //clean and store
-				print_address(&predict_address);
-				print_binary_address(&predict_address);
-
+				//print_address(&predict_address);
+				//print_binary_address(&predict_address);
+			} else {
+				//printf("setting first write!!\n");
+				//okay so this happens twice becasuse the order is 
+				//Write 1;
+				//Write 2;
+				//CNS 1 (write 1 - > write 2)
+				first_write = wr->rdma_extended_header.vaddr;
 			}
 
 			last_write = wr->rdma_extended_header.vaddr;
@@ -313,24 +308,42 @@ void true_classify(struct rte_mbuf * pkt) {
 		//print_packet(pkt);
 		print_next = 0;
 		struct cs_request * cs = (struct cs_request*) clover_header;
-		printf("swap_or_add ");
 
 		uint64_t swap = MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add));
 		swap = htobe64(swap);
-		print_address(&swap);
-		print_binary_address(&swap);
+		//print_address(&swap);
+		//print_binary_address(&swap);
 
 
 		if (swap != predict_address && last_cns != 0) {
 			printf("\n\n\n\nFAILURE FAILURE Address prediction incorrect\n\n\n");
 		}
 
+
+		//Now attempt to reconstruct the entire packet
+		uint64_t new_swap = 0;
+		//copy new swap from sent address
+		new_swap = be64toh(cs->atomic_req.swap_or_add);
+		//clear the address bits
+		new_swap = (~MITSUME_PTR_MASK_LH) & new_swap;
+		//replace address bits with predicted bits
+		new_swap += (be64toh(predict_address) << 28);
+		new_swap = htobe64(new_swap);
+
+		if (new_swap != cs->atomic_req.swap_or_add) {
+			printf("unable to correctly swap out addresses (original, new)");
+			print_address(&(cs->atomic_req.swap_or_add));
+			print_address(&new_swap);
+		}
+
+		cs->atomic_req.swap_or_add = new_swap;
+
 		if (last_cns == 0) {
 			first_cns = swap;
 		}
 
 		last_cns = swap;
-		printf("\n");
+		//printf("\n");
 		//printf("rkey %d \n",&(cs->atomic_req.rkey));
 		//printf("-----------//CNS---------------------\n");
 	}
