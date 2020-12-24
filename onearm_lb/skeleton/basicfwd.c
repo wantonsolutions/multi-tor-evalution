@@ -19,6 +19,9 @@
 #include "clover_structs.h"
 #include <arpa/inet.h>
 
+#include <rte_table.h>
+#include <endian.h>
+
 
 #define RC_SEND 0x04
 #define RC_WRITE_ONLY 0x0A
@@ -31,6 +34,27 @@
 #define RDMA_COUNTER_SIZE 256
 #define RDMA_STRING_NAME_LEN 256
 #define PACKET_SIZES 256
+
+#define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
+#define BYTE_TO_BINARY(byte)  \
+  (byte & 0x80 ? '1' : '0'), \
+  (byte & 0x40 ? '1' : '0'), \
+  (byte & 0x20 ? '1' : '0'), \
+  (byte & 0x10 ? '1' : '0'), \
+  (byte & 0x08 ? '1' : '0'), \
+  (byte & 0x04 ? '1' : '0'), \
+  (byte & 0x02 ? '1' : '0'), \
+  (byte & 0x01 ? '1' : '0') 
+
+#define MITSUME_PTR_MASK_LH 0x0ffffffff0000000
+//#define MITSUME_PTR_MASK_OFFSET                 0x0000fffff8000000
+#define MITSUME_PTR_MASK_NEXT_VERSION 0x0000000007f80000
+#define MITSUME_PTR_MASK_ENTRY_VERSION 0x000000000007f800
+#define MITSUME_PTR_MASK_XACT_AREA 0x00000000000007fe
+#define MITSUME_PTR_MASK_OPTION 0x0000000000000001
+
+#define MITSUME_GET_PTR_LH(A) (A & MITSUME_PTR_MASK_LH) >> 28
+
 
 char ib_print[RDMA_COUNTER_SIZE][RDMA_STRING_NAME_LEN];
 
@@ -72,7 +96,7 @@ void count_values(uint64_t *index, uint32_t *count, uint32_t size, uint64_t valu
 void print_count(uint64_t *index, uint32_t *count, uint32_t size) {
 	for (uint32_t i=0;i<size;i++) {
 		if (index[i] != 0) {
-			printf("Index: ");
+			printf("[%08d] Index: ",i);
 			print_bytes((uint8_t *)&index[i],sizeof(uint64_t));
 			printf(" Count: %d\n",count[i]);
 		}
@@ -81,7 +105,7 @@ void print_count(uint64_t *index, uint32_t *count, uint32_t size) {
 }
 
 void count_read_req_addr(struct read_request * rr) {
-	count_values(read_req_addr_index,read_req_addr_count,KEYSPACE,rr->addr);
+	count_values(read_req_addr_index,read_req_addr_count,KEYSPACE,rr->rdma_extended_header.vaddr);
 }
 /*
 void count_read_resp_addr(struct read_response * rr) {
@@ -100,12 +124,10 @@ void print_read_resp_addr(void) {
 void classify_packet_size(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce) {
 	uint32_t size = ntohs(ip->total_length);
 	uint8_t opcode = roce->opcode;
-
 	if (packet_counter == 0) {
 		bzero(packet_size_index,RDMA_COUNTER_SIZE*PACKET_SIZES*sizeof(uint32_t));
 		bzero(packet_size_calls,RDMA_COUNTER_SIZE*PACKET_SIZES*sizeof(uint32_t));
 	}
-
 	count_values(packet_size_index[opcode],packet_size_calls[opcode], PACKET_SIZES, size);
 }
 
@@ -117,29 +139,52 @@ void print_bytes(const uint8_t * buf, uint32_t len) {
 	}
 }
 
-
-void print_ib_mr(struct ib_mr_attr * mr) {
-		printf("address: ");
-		for (uint32_t i=0;i<sizeof(uint64_t);i++) {
-			printf("%02X", *((uint8_t*)(&(mr->addr)) + i));
-		}
-		printf("\n");
-		printf("remote key: %d (nh) %d\n", mr->rkey, ntohl(mr->rkey));
-		printf("machine id %d (nh) %d\n", mr->machine_id, ntohs(mr->machine_id));
-		return;
+void print_binary_bytes(const uint8_t * buf, uint32_t len) {
+	for (uint32_t i=0;i<len;i++)  {
+		printf(BYTE_TO_BINARY_PATTERN" ", BYTE_TO_BINARY(buf[i]));
+	}
 }
 
-void print_read_request(struct read_request* rr) {
-	printf("(START) Read Request: ");
-	print_bytes((void*) rr, 14);
-	printf("\n");
-
+void print_address(uint64_t *address) {
 	printf("address: ");
-	print_bytes((uint8_t *)&(rr->addr),sizeof(uint64_t));
+	print_bytes(address,sizeof(uint64_t));
+	printf("\n");
+}
+
+
+void print_binary_address(uint64_t *address) {
+	printf("bin address: ");
+	print_binary_bytes(address,sizeof(uint64_t));
+	printf("\n");
+}
+
+void print_ack_extended_header(struct AETH *aeth) {
+	printf("Reserved        %u\n", ntohs(aeth->reserved));
+	printf("Opcode          %u\n", ntohs(aeth->opcode));
+	printf("Credit Count    %u\n", ntohs(aeth->credit_count));
+	printf("Sequence Number %u\n", ntohl(aeth->sequence_number));
+}
+
+void print_rdma_extended_header(struct RTEH *rteh) {
+	printf("virtual address: ");
+	print_bytes((uint8_t *)&(rteh->vaddr),sizeof(uint64_t));
 	printf("\n");
 
-	printf("unknown: %d (nh) %d\n", rr->unknown, ntohl(rr->unknown));
-	printf("len %d (nh) %d\n", rr->len, ntohs(rr->len));
+	printf("rkey: %u \traw:   ", ntohl(rteh->rkey));
+	print_bytes((uint8_t *)&(rteh->rkey),sizeof(uint32_t));
+	printf("\n");
+
+	printf("dma len %u \traw: ", ntohl(rteh->dma_length));
+	print_bytes((uint8_t *)&(rteh->dma_length),sizeof(uint32_t));
+} 
+ 
+void print_read_request(struct read_request* rr) {
+	printf("(START) Read Request: \n");
+	printf("(raw) ");
+	print_bytes((void*) rr, 16);
+	printf("\n");
+	print_rdma_extended_header(&rr->rdma_extended_header);
+	printf("\n");
 	//printf("(STOP) Read Request\n");
 	return;
 }
@@ -154,11 +199,27 @@ void print_read_response(struct read_response *rr, uint32_t size) {
 
 void print_write_request(struct write_request* wr) {
 	printf("(START) Write Request\n");
-	print_ib_mr(&wr->mr_attr);
+	print_rdma_extended_header(&wr->rdma_extended_header);
 	printf("(STOP) Write Request\n");
 	return;
 }
 
+
+#define KEY_VERSION_RING_SIZE 256
+static uint64_t key_address[KEYSPACE];
+static uint64_t key_versions[KEYSPACE][KEY_VERSION_RING_SIZE];
+static uint32_t key_count[KEYSPACE];
+
+
+static int print_next = 0;
+static uint64_t last_cns = 0;
+static uint64_t last_write =0;
+
+static uint64_t first_address=0;
+static uint64_t first_cns=0;
+
+static uint64_t second_address=0;
+static uint64_t second_cns=0;
 void true_classify(struct rte_mbuf * pkt) {
 //void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct clover_hdr * clover) {
 	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
@@ -170,10 +231,11 @@ void true_classify(struct rte_mbuf * pkt) {
 	uint32_t size = ntohs(ipv4_hdr->total_length);
 	uint8_t opcode = roce_hdr->opcode;
 
+
 	if (size == 60 && opcode == RC_READ_REQUEST) {
 		struct read_request * rr = (struct read_request *)clover_header;
-		print_packet(pkt);
-		print_read_request(rr);
+		//print_packet(pkt);
+		//print_read_request(rr);
 		count_read_req_addr(rr);
 	}
 
@@ -181,15 +243,196 @@ void true_classify(struct rte_mbuf * pkt) {
 	//if (size == 1072 && opcode == RC_READ_RESPONSE) {
 	if ((size == 56 || size == 1072) && opcode == RC_READ_RESPONSE) {
 		struct read_response * rr = (struct read_response*) clover_header;
-		print_packet(pkt);
-		print_read_response(rr, size);
+
+		//print_packet(pkt);
+		//print_read_response(rr, size);
 		//count_read_resp_addr(rr);
 	}
 
+	if (size == 1084 && opcode == RC_WRITE_ONLY) {
+	//if (opcode == RC_WRITE_ONLY) {
+		//printf("write request\n");
+		//This is a data write
+		struct write_request * wr = (struct write_request*) clover_header;
+		uint64_t *key = &(wr->data);
+
+		//only print key 1
+		if (key[0] == 1) {
+			print_next = 1;
+			uint64_t address = wr->rdma_extended_header.vaddr;
+
+			if(first_address != 0 && second_address == 0) {
+				second_address = be64toh(wr->rdma_extended_header.vaddr);
+			}
+
+			if(first_address==0) {
+				first_address = wr->rdma_extended_header.vaddr;
+			}
+
+
+			if (last_write !=0 && first_cns != 0) {
+				printf("first address ");
+				print_address(&first_address);
+				print_binary_address(&first_address);
+
+				printf("first cns ");
+				print_address(&first_cns);
+				print_binary_address(&first_cns);
+
+				/*
+				uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - first_address) >> 10) + first_cns;
+				printf("predict from not ");
+				predict_address = htobe64(predict_address);
+				print_address(&predict_address);
+				print_binary_address(&predict_address);
+				*/
+
+				printf("predict from not v2 ");
+				//uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_address)) >> 10) + be64toh(second_cns);
+				uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_address)) >> 10) + second_cns;
+				predict_address = htobe64(predict_address);
+				print_address(&predict_address);
+				print_binary_address(&predict_address);
+
+
+			}
+
+			if (last_write !=0 && second_cns != 0) {
+				printf("second address ");
+				uint64_t tmp_second_address = htobe64(second_address);
+				print_address(&tmp_second_address);
+				print_binary_address(&tmp_second_address);
+
+				printf("second cns ");
+				uint64_t tmp_second_cns = htobe64(second_cns);
+				print_address(&tmp_second_cns);
+				print_binary_address(&tmp_second_cns);
+
+
+				uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - second_address) >> 10) + second_cns;
+				printf("predict from not 2");
+				predict_address = htobe64(predict_address);
+				print_address(&predict_address);
+				print_binary_address(&predict_address);
+			}
+			//print_packet(pkt);
+
+			//printf("--------------write-------------\n");
+			//printf("write ");
+			//print_address(&address);
+
+			//printf("next pointer: ");
+			//print_address(&wr->ptr);
+			//printf("\n");
+
+			if (last_write != 0) {
+				uint64_t diff = be64toh(wr->rdma_extended_header.vaddr) - be64toh(last_write);
+				diff = htobe64(diff);
+				printf("last write diff ");
+				print_address(&diff);
+				print_binary_address(&diff);
+
+				//uint64_t predict_diff = diff >> 10;
+				printf("predict diff ");
+				uint64_t predict_diff = be64toh(diff) >> 10;
+				predict_diff = htobe64(predict_diff);
+				print_address(&predict_diff);
+				print_binary_address(&predict_diff);
+
+				printf("predict address ");
+				uint64_t predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(last_write)) >> 10) + be64toh(last_cns);
+				predict_address = htobe64(predict_address);
+				print_address(&predict_address);
+				print_binary_address(&predict_address);
+			}
+			last_write = wr->rdma_extended_header.vaddr;
+
+			if (size >= 1084) {
+				//printf("key %02X %02X %02X %02X \n",key[0], key[1], key[2], key[3]);
+				//Update current write kv location
+				key_address[*key] = wr->rdma_extended_header.vaddr;
+				//Update the most recent version of the kv store
+				key_versions[*key][key_count[*key]%KEY_VERSION_RING_SIZE]=wr->rdma_extended_header.vaddr;
+				//update the keys write count
+				key_count[*key]++;
+			} else {
+				printf("size too small to print extra data\n");
+			}
+			//printf("--------------//write-------------\n");
+		}
+
+
+
+		//Periodically print the sate of a particular key.
+		if (*key == 1 && key_count[*key]==KEY_VERSION_RING_SIZE) {
+			for (int i=0;i<KEY_VERSION_RING_SIZE;i++){
+				printf("key: %d address:%"PRIu64" index: %d\n",*key,key_versions[*key][i], i+(key_count[*key]-KEY_VERSION_RING_SIZE));
+			}
+		}
+
+		//TODO this is where a check and set operation for a given key should be generated
+	}
+
+	//if (size == 72 && opcode == RC_CNS) {
+	if (size == 72 && opcode == RC_CNS && print_next) {
+		//print_packet(pkt);
+		print_next = 0;
+		struct cs_request * cs = (struct cs_request*) clover_header;
+
+		//printf("-----------CNS---------------------\n");
+		//printf("vaddr ");
+		//print_address(&(cs->atomic_req.vaddr));
+
+		//((uint8_t*)(&cs->atomic_req.compare))[1] = 0x00;
+		//((uint8_t*)(&cs->atomic_req.compare))[2] = 0x07;
+		//((uint8_t*)(&cs->atomic_req.compare))[5] = 0x00;
+
+		//printf("compare ");
+		//print_address(&(cs->atomic_req.compare));
+		printf("swap_or_add ");
+		uint64_t swap = MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add));
+		swap = htobe64(swap);
+		print_address(&swap);
+		print_binary_address(&swap);
+		//printf("--o-- swap_or_add ");
+		//uint64_t oswap = cs->atomic_req.swap_or_add;
+		//print_address(&oswap);
+		//print_binary_address(&oswap);
+
+
+		if(second_cns==0 && first_cns!=0) {
+			second_cns = MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add));
+			first_cns = htobe64(MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add)));
+		}
+
+		if(first_cns==0) {
+			first_cns = htobe64(MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add)));
+		}
+
+
+		if (last_cns != 0) {
+			printf("cns gap        ");
+			uint64_t diff = be64toh(swap) - be64toh(last_cns);
+			diff = htobe64(diff);
+			print_address(&diff);
+			print_binary_address(&diff);
+
+		}
+		last_cns = swap;
+		printf("\n");
+		//printf("rkey %d \n",&(cs->atomic_req.rkey));
+		//printf("-----------//CNS---------------------\n");
+	}
 
 	if (packet_counter % 10000 == 0) {
-		print_read_req_addr();
+		//print_read_req_addr();
 		//print_read_resp_addr();
+
+		for (int i=0;i<KEYSPACE;i++) {
+			if (key_address[i] != 0) {
+				///printf("key %i: address: %"PRIu64": writes: %d\n",i,key_address[i],key_count[i]);
+			}
+		}
 	}
 	return;
 }
@@ -219,6 +462,7 @@ void print_rdma_call_count(void) {
 				printf("Call: %s Count: %d Raw: %02X\n",ib_print[i],rdma_call_count[i],i);
 			}
 		}
+
 	}
 	return;
 }
@@ -728,8 +972,6 @@ lcore_main(void)
 			log_printf(INFO,"rx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, ipv4_udp_rx);	
 
 			/* Send burst of TX packets, to the same port */
-			const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
-			inet_pton(AF_INET,"127.0.0.1",&(ipv4_hdr->dst_addr));
 			const uint16_t nb_tx = rte_eth_tx_burst(port, 0, rx_pkts, nb_rx);
 			//printf("rx:%" PRIu16 ",tx:%" PRIu16 ",udp_rx:%" PRIu16 "\n",nb_rx, nb_tx, ipv4_udp_rx);
 			//printf("rx:%" PRIu16 ",tx:%" PRIu16 "\n",nb_rx, nb_tx);

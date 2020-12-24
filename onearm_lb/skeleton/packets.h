@@ -66,7 +66,7 @@ typedef struct __attribute__ ((__packed__)) roce_v2_header {
     unsigned int ack:1;
     unsigned int reserved:7;
     unsigned int packet_sequence_number:24;
-    unsigned int padding:16;
+    //unsigned int padding:16;
     //unsigned int stew_pad:8; // TODO FIGURE OUT WHAT THE HELL THIS IS!!!
     //unsigned int ICRC:4;
 } roce_v2_header;

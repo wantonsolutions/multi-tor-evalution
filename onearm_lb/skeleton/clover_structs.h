@@ -15,56 +15,56 @@ struct ib_mr_attr {
   short machine_id;
 };
 
-struct RTEH {
+struct __attribute__ ((__packed__)) RTEH {
   uint64_t vaddr;
   uint32_t rkey;
   uint32_t dma_length;
 } RTEH;
 
-struct AETH {
+struct __attribute__ ((__packed__)) AETH {
   int reserved:1;
   int opcode:2;
-  int credit_count:7;
+  int credit_count:5;
   int sequence_number:24;
 } AETH;
 
-struct AtomicETH {
+struct __attribute__ ((__packed__)) AtomicETH {
   uint64_t vaddr;
-  uint32_t rket;
+  uint32_t rkey;
   uint64_t swap_or_add;
   uint64_t compare;
 } AtomicETH;
 
-struct AtomicACKETH {
+struct __attribute__ ((__packed__)) AtomicACKETH {
   uint64_t original_remote_data;
 } AtomicACKETH;
 
 
-struct read_request {
+struct __attribute__ ((__packed__)) read_request {
   struct RTEH rdma_extended_header;
 } read_request;
 
-struct read_response {
+struct __attribute__ ((__packed__)) read_response {
   struct AETH ack_extended;
   uint64_t ptr;           //cursor probably
   uint8_t * data;         //Might be null
 } read_response;
 
-struct write_request {
+struct __attribute__ ((__packed__)) write_request {
   struct RTEH rdma_extended_header;
   uint64_t ptr; //cursor probably
-  uint8_t *data;
+  uint8_t data;
 } write_request;
 
-struct rdma_ack {
+struct __attribute__ ((__packed__)) rdma_ack {
   struct AETH ack_extended;
 } rdma_ack;
 
-struct cs_request {
+struct __attribute__ ((__packed__)) cs_request {
   struct AtomicETH atomic_req;
 } cc_request;
 
-struct cs_response {
+struct __attribute__ ((__packed__)) cs_response {
   struct AETH ack_extended;
   struct AtomicACKETH atomc_ack_extended;
 } cs_response;
