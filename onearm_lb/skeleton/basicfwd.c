@@ -19,7 +19,10 @@
 #include "clover_structs.h"
 #include <arpa/inet.h>
 
+#include <rte_jhash.h>
+#include <rte_hash.h>
 #include <rte_table.h>
+
 #include <endian.h>
 
 
@@ -75,6 +78,59 @@ uint32_t read_req_addr_count[KEYSPACE];
 
 uint64_t read_resp_addr_index[KEYSPACE];
 uint32_t read_resp_addr_count[KEYSPACE];
+
+#define TOTAL_ENTRY 128
+
+static struct rte_hash_parameters qp2id_params = {
+	.name = "qp2id",
+    .entries = TOTAL_ENTRY,
+    .key_len = sizeof(uint32_t),
+    .hash_func = rte_jhash,
+    .hash_func_init_val = 0,
+    .socket_id = 0,
+};
+struct rte_hash* qp2id_table;
+static uint32_t qp_id_counter=0;
+uint32_t qp_values[TOTAL_ENTRY];
+
+#define HASH_RETURN_IF_ERROR(handle, cond, str, ...) do {                \
+    if (cond) {                         \
+        printf("ERROR line %d: " str "\n", __LINE__, ##__VA_ARGS__); \
+        if (handle) rte_hash_free(handle);          \
+        return -1;                      \
+    }                               \
+} while(0)
+
+void init_hash(void) {
+	qp2id_table = rte_hash_create(&qp2id_params);
+	HASH_RETURN_IF_ERROR(qp2id_table, qp2id_table == NULL, "qp2id_table creation failed");
+}
+
+void set_id(uint32_t qp, uint32_t id) {
+	printf("adding (%d,%d) to hash table\n",qp,id);
+	qp_values[id]=id;
+	int ret = rte_hash_add_key_data(qp2id_table,&qp,&qp_values[id]);
+	HASH_RETURN_IF_ERROR(qp2id_table, ret < 0, "unable to add new qp id (%d,%d)\n",qp,id);
+}
+
+uint32_t get_id(uint32_t qp) {
+	uint32_t* return_value;
+	int ret = rte_hash_lookup_data(qp2id_table,&qp,&return_value);
+
+	if (ret < 0) {
+		uint32_t id = qp_id_counter;
+		printf("no such id exists yet adding qp id pq: %d id: %d\n",qp, id);
+		qp_id_counter++;
+		set_id(qp,id);
+		return id;
+	} else {
+		return *return_value;
+	}
+
+}
+
+
+
 
 void count_values(uint64_t *index, uint32_t *count, uint32_t size, uint64_t value) {
 	//search
@@ -218,7 +274,7 @@ static uint64_t first_write[KEYSPACE];
 static uint64_t first_cns[KEYSPACE];
 static uint64_t predict_address[KEYSPACE];
 
-static uint64_t latest_key = 0;
+static uint64_t latest_key[TOTAL_ENTRY];
 
 static int init =0;
 
@@ -237,6 +293,8 @@ void true_classify(struct rte_mbuf * pkt) {
 		bzero(first_write,KEYSPACE*sizeof(uint64_t));
 		bzero(first_cns,KEYSPACE*sizeof(uint64_t));
 		bzero(predict_address,KEYSPACE*sizeof(uint64_t));
+		bzero(latest_key,TOTAL_ENTRY*sizeof(uint64_t));
+		init_hash();
 		init = 1;
 	}
 
@@ -256,20 +314,26 @@ void true_classify(struct rte_mbuf * pkt) {
 		//count_read_resp_addr(rr);
 	}
 
+	//uint16_t r_keyspace = ntohs(roce_hdr->partition_key);
+	uint32_t r_qp= roce_hdr->dest_qp;
+
+	//Write Request
 	if (size == 1084 && opcode == RC_WRITE_ONLY) {
-	//if (opcode == RC_WRITE_ONLY) {
-		//printf("write request\n");
-		//This is a data write
+		printf("(write) Accessing remote keyspace %d\n",r_qp);
 		struct write_request * wr = (struct write_request*) clover_header;
 		//print_packet(pkt);
 		uint64_t *key = &(wr->data);
-		//printf("KEY: %"PRIu64"\n", *key);
+		printf("KEY: %"PRIu64"\n", *key);
 
 		uint64_t address = wr->rdma_extended_header.vaddr;
 
+		uint32_t id = get_id(r_qp);
+
+		printf("ID: %d KEY: %d\n",id,*key);
+
 
 		if(first_write[*key] != 0 && first_cns[*key] != 0) {
-			printf("predict from not addr for key %"PRIu64"\n");
+			printf("predict from not addr for key %"PRIu64", for remote key space %d\n",*key,roce_hdr->partition_key);
 			predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10) + be64toh(first_cns[*key]);
 			predict_address[*key] = htobe64( 0x00000000FFFFFF & predict_address[*key]); //clean and store
 			//print_address(&predict_address);
@@ -282,7 +346,7 @@ void true_classify(struct rte_mbuf * pkt) {
 			//CNS 1 (write 1 - > write 2)
 			first_write[*key] = wr->rdma_extended_header.vaddr;
 		}
-		latest_key = *key;
+		latest_key[id] = *key;
 
 
 		if (size >= 1084) {
@@ -314,25 +378,29 @@ void true_classify(struct rte_mbuf * pkt) {
 	//if (size == 72 && opcode == RC_CNS && print_next) {
 		//print_packet(pkt);
 		//print_next = 0;
+		printf("(cns  ) Accessing remote keyspace %d\n",r_qp);
 		struct cs_request * cs = (struct cs_request*) clover_header;
 
 		uint64_t swap = MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add));
 		swap = htobe64(swap);
 
 
-		//printf("Latest KEY: %"PRIu64"\n", latest_key);
+		uint32_t id = get_id(r_qp);
+
+
+		printf("Latest id KEY: id: %d, key %"PRIu64"\n",id, latest_key[id]);
 		//print_address(&swap);
 		//print_binary_address(&swap);
 
 		//This is the first instance of the cns for this key, it is a misunderstood case
 		//For now return after setting the first instance of the key to the swap value
-		if (first_cns[latest_key] == 0) {
-			printf("setting swap for key %"PRIu64"\n");
-			first_cns[latest_key] = swap;
+		if (first_cns[latest_key[id]] == 0) {
+			printf("setting swap for key %"PRIu64"\n", latest_key[id]);
+			first_cns[latest_key[id]] = swap;
 			return;
 		}
 
-		if (swap == predict_address[latest_key]) {
+		if (swap == predict_address[latest_key[id]]) {
 			//printf("correct prediction for key %"PRIu64"\n",swap);
 			//Now swap out the predicted address
 			uint64_t new_swap = 0;
@@ -341,7 +409,7 @@ void true_classify(struct rte_mbuf * pkt) {
 			//clear the address bits
 			new_swap = (~MITSUME_PTR_MASK_LH) & new_swap;
 			//replace address bits with predicted bits
-			new_swap += (be64toh(predict_address[latest_key]) << 28);
+			new_swap += (be64toh(predict_address[latest_key[id]]) << 28);
 			new_swap = htobe64(new_swap);
 
 			//TODO when we have multiple hosts and we will want to actually set the address
@@ -353,7 +421,7 @@ void true_classify(struct rte_mbuf * pkt) {
 			cs->atomic_req.swap_or_add = new_swap;
 
 		} else {
-			printf("\n\n\n\nFAILURE FAILURE Address prediction incorrect for key %"PRIu64" actual value "PRIu64"\n\n\n",latest_key, swap);
+			printf("\n\n\n\nFAILURE FAILURE Address prediction incorrect for key %"PRIu64" actual address value %"PRIu64" =/= %"PRIu64"\n\n\n",latest_key[id], predict_address[latest_key[id]],swap);
 			//TODO deal with this error when it happens
 			exit(0);
 		}
