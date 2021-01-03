@@ -35,6 +35,9 @@
 #define RDMA_STRING_NAME_LEN 256
 #define PACKET_SIZES 256
 
+#define KEYSPACE 1000000
+#define RDMA_CALL_SIZE 8192
+
 #define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c"
 #define BYTE_TO_BINARY(byte)  \
   (byte & 0x80 ? '1' : '0'), \
@@ -58,7 +61,6 @@
 
 char ib_print[RDMA_COUNTER_SIZE][RDMA_STRING_NAME_LEN];
 
-#define RDMA_CALL_SIZE 8192
 static int rdma_counter = 0;
 uint8_t rdma_calls[RDMA_CALL_SIZE];
 uint32_t rdma_call_count[RDMA_COUNTER_SIZE];
@@ -68,7 +70,6 @@ static int packet_counter = 0;
 uint64_t packet_size_index[RDMA_COUNTER_SIZE][PACKET_SIZES];
 uint32_t packet_size_calls[RDMA_COUNTER_SIZE][PACKET_SIZES];
 
-#define KEYSPACE 1000000
 uint64_t read_req_addr_index[KEYSPACE];
 uint32_t read_req_addr_count[KEYSPACE];
 
@@ -213,11 +214,13 @@ static uint32_t key_count[KEYSPACE];
 
 static int print_next = 0;
 static uint64_t last_cns = 0;
-static uint64_t last_write =0;
-static uint64_t first_write=0;
-static uint64_t first_cns=0;
+static uint64_t first_write[KEYSPACE];
+static uint64_t first_cns[KEYSPACE];
+static uint64_t predict_address[KEYSPACE];
 
-static uint64_t predict_address=0;
+static uint64_t latest_key = 0;
+
+static int init =0;
 
 void true_classify(struct rte_mbuf * pkt) {
 //void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct clover_hdr * clover) {
@@ -230,6 +233,12 @@ void true_classify(struct rte_mbuf * pkt) {
 	uint32_t size = ntohs(ipv4_hdr->total_length);
 	uint8_t opcode = roce_hdr->opcode;
 
+	if (init == 0) {
+		bzero(first_write,KEYSPACE*sizeof(uint64_t));
+		bzero(first_cns,KEYSPACE*sizeof(uint64_t));
+		bzero(predict_address,KEYSPACE*sizeof(uint64_t));
+		init = 1;
+	}
 
 	if (size == 60 && opcode == RC_READ_REQUEST) {
 		struct read_request * rr = (struct read_request *)clover_header;
@@ -252,44 +261,42 @@ void true_classify(struct rte_mbuf * pkt) {
 		//printf("write request\n");
 		//This is a data write
 		struct write_request * wr = (struct write_request*) clover_header;
+		//print_packet(pkt);
 		uint64_t *key = &(wr->data);
+		//printf("KEY: %"PRIu64"\n", *key);
 
-		//only print key 1
-		if (key[0] == 1) {
-			print_next = 1;
-			uint64_t address = wr->rdma_extended_header.vaddr;
+		uint64_t address = wr->rdma_extended_header.vaddr;
 
 
-			if(first_write != 0 && first_cns != 0) {
-				//printf("predict from not addr");
-				predict_address = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write)) >> 10) + be64toh(first_cns);
-				predict_address = htobe64( 0x00000000FFFFFF & predict_address); //clean and store
-				//print_address(&predict_address);
-				//print_binary_address(&predict_address);
-			} else {
-				//printf("setting first write!!\n");
-				//okay so this happens twice becasuse the order is 
-				//Write 1;
-				//Write 2;
-				//CNS 1 (write 1 - > write 2)
-				first_write = wr->rdma_extended_header.vaddr;
-			}
-
-			last_write = wr->rdma_extended_header.vaddr;
-
-			if (size >= 1084) {
-				//printf("key %02X %02X %02X %02X \n",key[0], key[1], key[2], key[3]);
-				//Update current write kv location
-				key_address[*key] = wr->rdma_extended_header.vaddr;
-				//Update the most recent version of the kv store
-				key_versions[*key][key_count[*key]%KEY_VERSION_RING_SIZE]=wr->rdma_extended_header.vaddr;
-				//update the keys write count
-				key_count[*key]++;
-			} else {
-				printf("size too small to print extra data\n");
-			}
-			//printf("--------------//write-------------\n");
+		if(first_write[*key] != 0 && first_cns[*key] != 0) {
+			printf("predict from not addr for key %"PRIu64"\n");
+			predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10) + be64toh(first_cns[*key]);
+			predict_address[*key] = htobe64( 0x00000000FFFFFF & predict_address[*key]); //clean and store
+			//print_address(&predict_address);
+			//print_binary_address(&predict_address);
+		} else {
+			//printf("setting first write!!\n");
+			//okay so this happens twice becasuse the order is 
+			//Write 1;
+			//Write 2;
+			//CNS 1 (write 1 - > write 2)
+			first_write[*key] = wr->rdma_extended_header.vaddr;
 		}
+		latest_key = *key;
+
+
+		if (size >= 1084) {
+			//printf("key %02X %02X %02X %02X \n",key[0], key[1], key[2], key[3]);
+			//Update current write kv location
+			key_address[*key] = wr->rdma_extended_header.vaddr;
+			//Update the most recent version of the kv store
+			key_versions[*key][key_count[*key]%KEY_VERSION_RING_SIZE]=wr->rdma_extended_header.vaddr;
+			//update the keys write count
+			key_count[*key]++;
+		} else {
+			printf("size too small to print extra data\n");
+		}
+		//printf("--------------//write-------------\n");
 
 
 
@@ -303,50 +310,55 @@ void true_classify(struct rte_mbuf * pkt) {
 		//TODO this is where a check and set operation for a given key should be generated
 	}
 
-	//if (size == 72 && opcode == RC_CNS) {
-	if (size == 72 && opcode == RC_CNS && print_next) {
+	if (size == 72 && opcode == RC_CNS) {
+	//if (size == 72 && opcode == RC_CNS && print_next) {
 		//print_packet(pkt);
-		print_next = 0;
+		//print_next = 0;
 		struct cs_request * cs = (struct cs_request*) clover_header;
 
 		uint64_t swap = MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add));
 		swap = htobe64(swap);
+
+
+		//printf("Latest KEY: %"PRIu64"\n", latest_key);
 		//print_address(&swap);
 		//print_binary_address(&swap);
 
-
-		if (swap != predict_address && last_cns != 0) {
-			printf("\n\n\n\nFAILURE FAILURE Address prediction incorrect\n\n\n");
+		//This is the first instance of the cns for this key, it is a misunderstood case
+		//For now return after setting the first instance of the key to the swap value
+		if (first_cns[latest_key] == 0) {
+			printf("setting swap for key %"PRIu64"\n");
+			first_cns[latest_key] = swap;
+			return;
 		}
 
+		if (swap == predict_address[latest_key]) {
+			//printf("correct prediction for key %"PRIu64"\n",swap);
+			//Now swap out the predicted address
+			uint64_t new_swap = 0;
+			//copy new swap from sent address
+			new_swap = be64toh(cs->atomic_req.swap_or_add);
+			//clear the address bits
+			new_swap = (~MITSUME_PTR_MASK_LH) & new_swap;
+			//replace address bits with predicted bits
+			new_swap += (be64toh(predict_address[latest_key]) << 28);
+			new_swap = htobe64(new_swap);
 
-		//Now attempt to reconstruct the entire packet
-		uint64_t new_swap = 0;
-		//copy new swap from sent address
-		new_swap = be64toh(cs->atomic_req.swap_or_add);
-		//clear the address bits
-		new_swap = (~MITSUME_PTR_MASK_LH) & new_swap;
-		//replace address bits with predicted bits
-		new_swap += (be64toh(predict_address) << 28);
-		new_swap = htobe64(new_swap);
+			//TODO when we have multiple hosts and we will want to actually set the address
+			if (new_swap != cs->atomic_req.swap_or_add) {
+				printf("unable to correctly swap out addresses (original, new)");
+				print_address(&(cs->atomic_req.swap_or_add));
+				print_address(&new_swap);
+			}
+			cs->atomic_req.swap_or_add = new_swap;
 
-		if (new_swap != cs->atomic_req.swap_or_add) {
-			printf("unable to correctly swap out addresses (original, new)");
-			print_address(&(cs->atomic_req.swap_or_add));
-			print_address(&new_swap);
+		} else {
+			printf("\n\n\n\nFAILURE FAILURE Address prediction incorrect for key %"PRIu64" actual value "PRIu64"\n\n\n",latest_key, swap);
+			//TODO deal with this error when it happens
+			exit(0);
 		}
-
-		cs->atomic_req.swap_or_add = new_swap;
-
-		if (last_cns == 0) {
-			first_cns = swap;
-		}
-
-		last_cns = swap;
-		//printf("\n");
-		//printf("rkey %d \n",&(cs->atomic_req.rkey));
-		//printf("-----------//CNS---------------------\n");
 	}
+
 
 	if (packet_counter % 10000 == 0) {
 		//print_read_req_addr();
