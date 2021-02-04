@@ -58,6 +58,7 @@ CFLAGS_main.o += -Wno-return-type
 endif
 
 EXTRA_CFLAGS += -O3 -g -Wfatal-errors
+EXTRA_LDFLAGS= -lz
 
 include $(RTE_SDK)/mk/rte.extapp.mk
 endif
