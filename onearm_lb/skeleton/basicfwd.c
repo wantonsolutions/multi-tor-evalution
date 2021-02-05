@@ -649,8 +649,14 @@ void true_classify(struct rte_mbuf * pkt) {
 		//TODO TODO this is also likely wrong in the multithereaded case.
 		if(first_write[*key] != 0 && first_cns[*key] != 0) {
 			//printf("predict from not addr for key %"PRIu64", for remote key space %d\n",*key,roce_hdr->partition_key);
-			predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10) + be64toh(first_cns[*key]);
+			predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10);
+			//This portion of the calculation seperates the the cns
+			predict_address[*key] = predict_address[*key] + be64toh(first_cns[*key]);
 			predict_address[*key] = htobe64( 0x00000000FFFFFF & predict_address[*key]); //clean and store
+
+			printf("Predict Address %"PRIu64"\n",predict_address[*key]);
+			outstanding_write_predicts[id][*key] = predict_address[*key];
+			outstanding_write_vaddrs[id][*key] = wr->rdma_extended_header.vaddr;
 
 			//print_address(&predict_address);
 			//print_binary_address(&predict_address);
@@ -661,7 +667,7 @@ void true_classify(struct rte_mbuf * pkt) {
 			//Write 2;
 			//CNS 1 (write 1 - > write 2)
 			if (first_write[*key] == 0) {
-				printf("first write is equal to zero, this is indeed the first write for key %"PRIu64"\n",*key);
+				printf("first write is being set, this is indeed the first write for key %"PRIu64" id: %d\n",*key,id);
 			} else {
 				printf("first write is equal to %"PRIu64" for key %"PRIu64" --- This is so likely an errror :( -- doing the same algorithm anyways\n",first_write[*key],*key);
 			}
@@ -672,10 +678,6 @@ void true_classify(struct rte_mbuf * pkt) {
 
 		}
 
-		printf("Predict Address %"PRIu64"\n",predict_address[*key]);
-		outstanding_write_predicts[id][*key] = predict_address[*key];
-		outstanding_write_vaddrs[id][*key] = wr->rdma_extended_header.vaddr;
-			
 		latest_key[id] = *key;
 
 
