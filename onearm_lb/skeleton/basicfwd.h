@@ -19,6 +19,21 @@
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 32
 
+
+//checksum
+
+uint32_t check_sums(const char* method, void* known, void* test, int try);
+uint32_t check_sums_wrap(const char* method, void* know, void* test);
+uint32_t csum_pkt_fast(struct rte_mbuf* pkt);
+uint32_t csum_pkt(struct rte_mbuf* pkt);
+
+
+
+
+
+
+
+
 //nessisary ib verbs
 
 
