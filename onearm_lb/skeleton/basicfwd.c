@@ -651,8 +651,9 @@ void true_classify(struct rte_mbuf * pkt) {
 			//printf("predict from not addr for key %"PRIu64", for remote key space %d\n",*key,roce_hdr->partition_key);
 			predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10);
 			//This portion of the calculation seperates the the cns
-			predict_address[*key] = predict_address[*key] + be64toh(first_cns[*key]);
-			predict_address[*key] = htobe64( 0x00000000FFFFFF & predict_address[*key]); //clean and store
+			printf("Predict Address %"PRIu64" Key %d\n",predict_address[*key],*key);
+			//predict_address[*key] = predict_address[*key] + be64toh(first_cns[*key]);
+			//predict_address[*key] = htobe64( 0x00000000FFFFFF & predict_address[*key]); //clean and store
 
 			printf("Predict Address %"PRIu64"\n",predict_address[*key]);
 			outstanding_write_predicts[id][*key] = predict_address[*key];
@@ -759,9 +760,15 @@ void true_classify(struct rte_mbuf * pkt) {
 
 		//Here we want to determine what the new tail of the list is based on the swap_or_add address
 		int found = 0;
+		uint32_t key = latest_key[id];
 		for (int i=0;i<qp_id_counter;i++) {
-			if (outstanding_write_predicts[i][latest_key[id]] == swap) {
-				next_vaddr[latest_key[id]] = outstanding_write_vaddrs[i][latest_key[id]];
+
+			uint64_t predict = outstanding_write_predicts[i][key];
+			predict = predict + be64toh(first_cns[key]);
+			predict = htobe64( 0x00000000FFFFFF & predict);
+
+			if (predict == swap) {
+				next_vaddr[latest_key[id]] = outstanding_write_vaddrs[i][key];
 				//erase the old entries
 				outstanding_write_predicts[i][latest_key[id]] = 0;
 				outstanding_write_vaddrs[i][latest_key[id]] = 0;
