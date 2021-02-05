@@ -365,7 +365,7 @@ uint32_t check_sums(const char* method, void* known, void* test, int try) {
 		printf("(%s) found the matching crc on try %d\n",method, try);
 		print_bytes(test,4);
 		printf("\n");
-		exit(0);
+		//exit(0);
 	}
 }
 uint32_t check_sums_wrap(const char* method, void* know, void* test) {
@@ -400,14 +400,91 @@ uint32_t csum_pkt_fast(struct rte_mbuf* pkt) {
 	uint8_t buf[1500];
 
 	printf("BEFORE\n\n");
-	print_packet(pkt);
+	//print_packet(pkt);
+
+	uint8_t ttl = ipv4_hdr->time_to_live;
 	ipv4_hdr->time_to_live=0xFF;
+
+	uint16_t ipv4_csum = ipv4_hdr->hdr_checksum;
 	ipv4_hdr->hdr_checksum=0xFFFF;
+
+	uint8_t ipv4_tos = ipv4_hdr->type_of_service;
 	ipv4_hdr->type_of_service=0xFF;
+
+	uint16_t udp_csum = udp_hdr->dgram_cksum;
 	udp_hdr->dgram_cksum=0xFFFF;
+
+	uint8_t roce_res = roce_hdr->reserverd;
 	roce_hdr->reserverd=0x3F;
+
+	uint8_t fecn = roce_hdr->fecn;
 	roce_hdr->fecn=1;
+
+	uint8_t bcen = roce_hdr->bcen;
 	roce_hdr->bcen=1;
+
+
+	uint8_t * start = (uint8_t*)(ipv4_hdr);
+	uint32_t len = ntohs(ipv4_hdr->total_length) - 4;
+
+	void * current = (void *)(ipv4_hdr) + ntohs(ipv4_hdr->total_length) - 4;
+	uint8_t current_val[4];
+	memcpy(current_val,current,4);
+	uint8_t test_buf[] = {0xff, 0xff, 0xff, 0xff};
+
+
+	bzero(buf,1500);
+	memcpy(buf,start,len);
+	//big_endian_reverse(buf,len);
+
+	//zlib todo figure out how to link
+	//uLong crc = crc32(0xFFFFFFFF, Z_NULL, 0); 
+
+	/* This seed is the result of computing a CRC with a seed of
+		* 0xfffffff and 8 bytes of 0xff representing a masked LRH.
+		*/
+	//uLong crc = 0xdebb20e3;
+	//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, buf, len) & 0xFFFFFFFF;
+	//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, test_buf, 4) & 0xFFFFFFFF;
+
+	//This sets upt the seed for the dummy LRH
+	//uLong crc = ~crc32(0xFFFFFFFF, test_buf, 4) & 0xFFFFFFFF;
+	uLong crc = crc32(0xFFFFFFFF, test_buf, 4);
+	
+	//Now lets test with the dummy bytes
+	crc = crc32(crc,buf,len) & 0xFFFFFFFF;
+
+
+	//crc = ~crc & 0xFFFFFFFF;
+	crc_check = crc;
+	//crc_check = ntohl(crc_check);
+	//big_endian_reverse(&crc_check,4);
+
+	//If we don't flip the crc it reads e320bbde
+	//If we do flip it, it turns to 0xdebb20e3
+	//we might only want to flip at the end
+
+	//We might not want to
+
+	print_bytes(&crc_check,4);
+	printf("\n");
+	//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, buf, len) & 0xFFFFFFFF;
+
+	//printf("%u\n",crc);
+	printf("FAST\n");
+	check_sums_wrap("zlib_crc",current_val, &crc_check);
+	printf("Finished fast\n");
+
+
+	ipv4_hdr->time_to_live=ttl;
+	ipv4_hdr->hdr_checksum = ipv4_csum;
+	ipv4_hdr->type_of_service = ipv4_tos;
+	udp_hdr->dgram_cksum = udp_csum;
+	roce_hdr->reserverd=roce_res;
+	roce_hdr->fecn = fecn;
+	roce_hdr->bcen = bcen;
+
+	return crc_check;
 
 }
 
@@ -425,13 +502,28 @@ uint32_t csum_pkt(struct rte_mbuf* pkt) {
 
 	printf("BEFORE\n\n");
 	print_packet(pkt);
+
+	uint8_t ttl = ipv4_hdr->time_to_live;
 	ipv4_hdr->time_to_live=0xFF;
+
+	uint16_t ipv4_csum = ipv4_hdr->hdr_checksum;
 	ipv4_hdr->hdr_checksum=0xFFFF;
+
+	uint8_t ipv4_tos = ipv4_hdr->type_of_service;
 	ipv4_hdr->type_of_service=0xFF;
+
+	uint16_t udp_csum = udp_hdr->dgram_cksum;
 	udp_hdr->dgram_cksum=0xFFFF;
+
+	uint8_t roce_res = roce_hdr->reserverd;
 	roce_hdr->reserverd=0x3F;
+
+	uint8_t fecn = roce_hdr->fecn;
 	roce_hdr->fecn=1;
+
+	uint8_t bcen = roce_hdr->bcen;
 	roce_hdr->bcen=1;
+
 
 	//uint32_t len = ntohs(ipv4_hdr->total_length) - 4;
 	print_packet(pkt);
@@ -565,6 +657,15 @@ uint32_t csum_pkt(struct rte_mbuf* pkt) {
 		}
 	}
 	print_packet(pkt);
+
+	ipv4_hdr->time_to_live=ttl;
+	ipv4_hdr->hdr_checksum = ipv4_csum;
+	ipv4_hdr->type_of_service = ipv4_tos;
+	udp_hdr->dgram_cksum = udp_csum;
+	roce_hdr->reserverd=roce_res;
+	roce_hdr->fecn = fecn;
+	roce_hdr->bcen = bcen;
+
 	return crc_check;
 
 }
@@ -822,17 +923,18 @@ void true_classify(struct rte_mbuf * pkt) {
 		dr_crc32_init_table();
 		init = 1;
 	}
-
+/*
 	if (opcode == RC_ACK) {
 		//This is purely here for testing CRC
-		uint32_t crc_check =csum_pkt(pkt); //This need to be added before we can validate packets
-		printf("Finished Checksumming as single ack, time to exit (TEST)\n");
-		exit(0);
+		uint32_t crc_check =csum_pkt_fast(pkt); //This need to be added before we can validate packets
+		//crc_check =csum_pkt(pkt); //This need to be added before we can validate packets
+		//printf("Finished Checksumming as single ack, time to exit (TEST)\n");
+		//exit(0);
 	} else {
 		//TODO REMOVE THIS RETURN IS JUST FOR TESTING
 		return;
 	}
-
+*/
 	if (size == 60 && opcode == RC_READ_REQUEST) {
 		struct read_request * rr = (struct read_request *)clover_header;
 		//print_read_request(rr);
@@ -950,8 +1052,13 @@ void true_classify(struct rte_mbuf * pkt) {
 
 			//uint32_t crc_check =csum_pkt(ipv4_hdr);
 
+			uint32_t crc_check =csum_pkt_fast(pkt); //Test that the checksum for the original can be calculated
 			cs->atomic_req.vaddr = next_vaddr[latest_key[id]]; //We can add this once we can predict with confidence
-			//uint32_t crc_check =csum_pkt(pkt); //This need to be added before we can validate packets
+			crc_check =csum_pkt_fast(pkt); //This need to be added before we can validate packets
+
+			void * current_checksum = (void *)(ipv4_hdr) + ntohs(ipv4_hdr->total_length) - 4;
+			memcpy(current_checksum,&crc_check,4);
+
 			//print_packet(pkt);
 
 			//exit(0);
@@ -972,6 +1079,7 @@ void true_classify(struct rte_mbuf * pkt) {
 				break;
 			}
 		}
+
 		if (!found) {
 			printf("unable to find the next oustanding write, how can this be!!??!\n");
 			exit(0);
@@ -1612,7 +1720,7 @@ void debug_icrc(struct rte_mempool *mbuf_pool) {
 	//memcpy(eth_hdr,test_ack_pkt,1);
 	printf("pkt copied\n");
 	print_packet(buf);
-	csum_pkt(buf);
+	csum_pkt_fast(buf);
 	exit(0);
 }
 
