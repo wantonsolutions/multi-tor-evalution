@@ -47,6 +47,71 @@
 //#define DR_STE_CRC_POLY 0x04C11DB7
 #define DR_STE_CRC_POLY 0xdebb20e3
 
+uint8_t test_ack_pkt[] = {
+0xEC,
+0x0D,
+0x9A,
+0x68,
+0x21,
+0xCC,
+0xEC,
+0x0D,
+0x9A,
+0x68,
+0x21,
+0xD0,
+0x08,
+0x00,
+0x45,
+0x02,
+0x00,
+0x30,
+0x2A,
+0x2B,
+0x40,
+0x00,
+0x40,
+0x11,
+0x8D,
+0x26,
+0xC0,
+0xA8,
+0x01,
+0x0C,
+0xC0,
+0xA8,
+0x01,
+0x0D,
+0xCF,
+0x15,
+0x12,
+0xB7,
+0x00,
+0x1C,
+0x00,
+0x00,
+0x11,
+0x40,
+0xFF,
+0xFF,
+0x00,
+0x00,
+0x6C,
+0xA9,
+0x00,
+0x00,
+0x0C,
+0x71,
+0x0D,
+0x00,
+0x00,
+0x01,
+0xDC,
+0x97,
+0x84,
+0x42,
+};
+
 static const unsigned int crc32_table[] =
 {
   0x00000000, 0x04c11db7, 0x09823b6e, 0x0d4326d9,
@@ -275,6 +340,8 @@ unsigned char reverse2(uint8_t b) {
    return b;
 }
 
+
+
 void big_endian_reverse(uint8_t * buf, uint32_t len) {
 	for (int i=0;i<len;i++) {
 		buf[i]=reverse(buf[i]);
@@ -295,7 +362,9 @@ uint32_t check_sums(const char* method, void* known, void* test, int try) {
 	printf("\n");
 	*/
 	if (memcmp(known,test, 4) == 0) {
-		printf("(%s) found the matching crc \n",method);
+		printf("(%s) found the matching crc on try %d\n",method, try);
+		print_bytes(test,4);
+		printf("\n");
 		exit(0);
 	}
 }
@@ -310,11 +379,36 @@ uint32_t check_sums_wrap(const char* method, void* know, void* test) {
 	check_sums(method,know, &variant, 2);
 
 	variant = *(uint32_t *)test;
-	big_endian_reverse(&variant, 4);
+	//big_endian_reverse(&variant, 4);
+	//big_endian_reverse(&variant, 4);
+				variant = ntohl(variant);
 	check_sums(method,know, &variant, 3);
 
 	variant = ~variant;
 	check_sums(method,know, &variant, 4);
+}
+
+
+uint32_t csum_pkt_fast(struct rte_mbuf* pkt) {
+	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
+	struct rte_ipv4_hdr* ipv4_hdr = (struct rte_ipv4_hdr *)((uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr));
+	struct rte_udp_hdr * udp_hdr = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
+	struct roce_v2_header * roce_hdr = (struct roce_v2_header *)((uint8_t*)udp_hdr + sizeof(struct rte_udp_hdr));
+	struct clover_hdr * clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
+
+	uint32_t crc_check;
+	uint8_t buf[1500];
+
+	printf("BEFORE\n\n");
+	print_packet(pkt);
+	ipv4_hdr->time_to_live=0xFF;
+	ipv4_hdr->hdr_checksum=0xFFFF;
+	ipv4_hdr->type_of_service=0xFF;
+	udp_hdr->dgram_cksum=0xFFFF;
+	roce_hdr->reserverd=0x3F;
+	roce_hdr->fecn=1;
+	roce_hdr->bcen=1;
+
 }
 
 //uint32_t csum_pkt(struct rte_ipv4_hdr* ipv4_hdr) {
@@ -345,16 +439,19 @@ uint32_t csum_pkt(struct rte_mbuf* pkt) {
 	uint8_t current_val[4];
 	memcpy(current_val,current,4);
 
-	/*
+	printf("----------------------\nRaw Checksum\n----------------------\n");
+	print_bytes(&current_val,4);
+
 
 	// try the best guess first
-	uint32_t blen = ntohs(ipv4_hdr->total_length - 4);
-	printf("bLen %d, ipv4_ttl: %d ipv4_csum: %d\n",blen,ipv4_hdr->time_to_live,ipv4_hdr->hdr_checksum);
-	memcpy(buf,ipv4_hdr,blen);
-	big_endian_reverse(buf,blen);
-	*/
+	//uint32_t blen = ntohs(ipv4_hdr->total_length - 4);
+	//printf("bLen %d, ipv4_ttl: %d ipv4_csum: %d\n",blen,ipv4_hdr->time_to_live,ipv4_hdr->hdr_checksum);
+	//memcpy(buf,ipv4_hdr,blen);
+	//big_endian_reverse(buf,blen);
 
+	uint8_t test_buf[] = {0xff, 0xff, 0xff, 0xff};
 
+	int flip_crc = 0;
 
 	//big_endian_reverse(current_val,4);
 	//return crc_check;
@@ -374,9 +471,35 @@ uint32_t csum_pkt(struct rte_mbuf* pkt) {
 	 		 * 0xfffffff and 8 bytes of 0xff representing a masked LRH.
 	 		 */
 			//uLong crc = 0xdebb20e3;
-			uLong crc = crc32(0xFFFFFFFF, buf, len);
-			crc = ~crc & 0xFFFFFFFF;
+			//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, buf, len) & 0xFFFFFFFF;
+			//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, test_buf, 4) & 0xFFFFFFFF;
+
+			//This sets upt the seed for the dummy LRH
+			//uLong crc = ~crc32(0xFFFFFFFF, test_buf, 4) & 0xFFFFFFFF;
+			uLong crc = crc32(0xFFFFFFFF, test_buf, 4);
+			
+			//Now lets test with the dummy bytes
+			crc = ~crc32(crc,buf,len) & 0xFFFFFFFF;
+
+			//crc = ~crc & 0xFFFFFFFF;
 			crc_check = crc;
+			//big_endian_reverse(&crc_check,4);
+
+			//If we don't flip the crc it reads e320bbde
+			//If we do flip it, it turns to 0xdebb20e3
+			//we might only want to flip at the end
+			if (flip_crc == 0) {
+				crc_check = ntohl(crc_check);
+			}
+
+
+			//We might not want to
+
+			print_bytes(&crc_check,4);
+			printf("\n");
+			//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, buf, len) & 0xFFFFFFFF;
+
+
 
 
 			//printf("%u\n",crc);
@@ -445,6 +568,9 @@ uint32_t csum_pkt(struct rte_mbuf* pkt) {
 	return crc_check;
 
 }
+
+
+
 char ib_print[RDMA_COUNTER_SIZE][RDMA_STRING_NAME_LEN];
 
 static int rdma_counter = 0;
@@ -666,6 +792,8 @@ static uint64_t latest_key[TOTAL_ENTRY];
 
 static int init =0;
 
+
+
 void true_classify(struct rte_mbuf * pkt) {
 //void true_classify(struct rte_ipv4_hdr *ip, struct roce_v2_header *roce, struct clover_hdr * clover) {
 	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
@@ -698,6 +826,11 @@ void true_classify(struct rte_mbuf * pkt) {
 	if (opcode == RC_ACK) {
 		//This is purely here for testing CRC
 		uint32_t crc_check =csum_pkt(pkt); //This need to be added before we can validate packets
+		printf("Finished Checksumming as single ack, time to exit (TEST)\n");
+		exit(0);
+	} else {
+		//TODO REMOVE THIS RETURN IS JUST FOR TESTING
+		return;
 	}
 
 	if (size == 60 && opcode == RC_READ_REQUEST) {
@@ -1467,6 +1600,22 @@ lcore_main(void)
 	}
 }
 
+void debug_icrc(struct rte_mempool *mbuf_pool) {
+	printf("debugging CRC using a cached packet\n");
+	struct rte_mbuf* buf = rte_pktmbuf_alloc(mbuf_pool);
+	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
+	uint16_t pkt_len = 62;
+	memcpy(eth_hdr,test_ack_pkt,pkt_len);
+	buf->pkt_len=pkt_len;
+	buf->data_len=pkt_len;
+	//printf("%d\n",test_ack_pkt[0]);
+	//memcpy(eth_hdr,test_ack_pkt,1);
+	printf("pkt copied\n");
+	print_packet(buf);
+	csum_pkt(buf);
+	exit(0);
+}
+
 /*
  * The main function, which does initialization and calls the per-lcore
  * functions.
@@ -1510,9 +1659,14 @@ main(int argc, char *argv[])
 
 	printf("Running on #%d cores\n",rte_lcore_count());
 
+	
+
 
 	init_ib_words();
 	/* Call lcore_main on the master core only. */
+	//debug_icrc(mbuf_pool);
+
+
 	lcore_main();
 
 	return 0;
