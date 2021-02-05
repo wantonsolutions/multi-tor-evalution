@@ -650,14 +650,11 @@ void true_classify(struct rte_mbuf * pkt) {
 		if(first_write[*key] != 0 && first_cns[*key] != 0) {
 			//printf("predict from not addr for key %"PRIu64", for remote key space %d\n",*key,roce_hdr->partition_key);
 			predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10);
-			//This portion of the calculation seperates the the cns
-			printf("Predict Address %"PRIu64" Key %d\n",predict_address[*key],*key);
-			//predict_address[*key] = predict_address[*key] + be64toh(first_cns[*key]);
-			//predict_address[*key] = htobe64( 0x00000000FFFFFF & predict_address[*key]); //clean and store
 
-			printf("Predict Address %"PRIu64"\n",predict_address[*key]);
+			//printf("Predict Address %"PRIu64"\n",predict_address[*key]);
 			outstanding_write_predicts[id][*key] = predict_address[*key];
 			outstanding_write_vaddrs[id][*key] = wr->rdma_extended_header.vaddr;
+			printf("full write is equal to %"PRIu64" for key %"PRIu64" id: %d\n",first_write[*key],*key,id);
 
 			//print_address(&predict_address);
 			//print_binary_address(&predict_address);
@@ -670,7 +667,7 @@ void true_classify(struct rte_mbuf * pkt) {
 			if (first_write[*key] == 0) {
 				printf("first write is being set, this is indeed the first write for key %"PRIu64" id: %d\n",*key,id);
 			} else {
-				printf("first write is equal to %"PRIu64" for key %"PRIu64" --- This is so likely an errror :( -- doing the same algorithm anyways\n",first_write[*key],*key);
+				printf("first write is equal to %"PRIu64" for key %"PRIu64" --- This is so likely an errror :( -- doing the same algorithm anyways id: %d\n",first_write[*key],*key,id);
 			}
 			first_write[*key] = wr->rdma_extended_header.vaddr;
 			next_vaddr[*key] = wr->rdma_extended_header.vaddr;
@@ -728,7 +725,7 @@ void true_classify(struct rte_mbuf * pkt) {
 		//This is the first instance of the cns for this key, it is a misunderstood case
 		//For now return after setting the first instance of the key to the swap value
 		if (first_cns[latest_key[id]] == 0) {
-			printf("setting swap for key %"PRIu64" -- Swap %"PRIu64"\n", latest_key[id],swap);
+			printf("setting swap for key %"PRIu64" id: %d -- Swap %"PRIu64"\n", latest_key[id],id, swap);
 			//TODO TODO START HERE, there is at least something going on which I should be performing here under certian circumstances.
 			first_cns[latest_key[id]] = swap;
 			return;
@@ -736,10 +733,12 @@ void true_classify(struct rte_mbuf * pkt) {
 
 		//Here we have had a first cns (assuming bunk, and we want to point to the latest in the list)
 		if (next_vaddr[latest_key[id]] == cs->atomic_req.vaddr) {
-			//printf("this is good, it seems we made the correct prediction, this is the common case\n");
+			printf("this is good, it seems we made the correct prediction, this is the common case Key %d ID %d\n",latest_key[id],id);
 			
 		} else {
-			printf("\n\n\n\n\n SWAPPPING OUT THE VADDR!!!!!!! \n\n\n\n\n");
+			printf("\n\n\n\n\n SWAPPPING OUT THE VADDR!!!!!!!"
+			"key %"PRIu64" id %d" 
+			"\n\n\n\n\n",latest_key[id],id);
 			//print_packet(pkt);
 
 			//uint32_t crc_check =csum_pkt(ipv4_hdr);
@@ -767,6 +766,7 @@ void true_classify(struct rte_mbuf * pkt) {
 			predict = predict + be64toh(first_cns[key]);
 			predict = htobe64( 0x00000000FFFFFF & predict);
 
+			printf("predict: %"PRIu64"\n",predict);
 			if (predict == swap) {
 				next_vaddr[latest_key[id]] = outstanding_write_vaddrs[i][key];
 				//erase the old entries
@@ -779,7 +779,7 @@ void true_classify(struct rte_mbuf * pkt) {
 		}
 
 		if (!found) {
-			printf("unable to find the next oustanding write, how can this be!!??! SWAP: %"PRIu64" latest_key[%d]=%"PRIu64", first cns[%d]=%"PRIu64"\n",swap,id,latest_key[id],latest_key[id],first_cns[latest_key[id]]);
+			printf("unable to find the next oustanding write, how can this be!!??! SWAP: %"PRIu64" latest_key[id = %d]=%"PRIu64", first cns[key = %d]=%"PRIu64"\n",swap,id,latest_key[id],latest_key[id],first_cns[latest_key[id]]);
 			exit(0);
 		}
 		/*
