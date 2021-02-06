@@ -168,190 +168,6 @@ uint32_t csum_pkt_fast(struct rte_mbuf* pkt) {
 
 }
 
-//uint32_t csum_pkt(struct rte_ipv4_hdr* ipv4_hdr) {
-uint32_t csum_pkt(struct rte_mbuf* pkt) {
-
-	struct rte_ether_hdr * eth_hdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
-	struct rte_ipv4_hdr* ipv4_hdr = (struct rte_ipv4_hdr *)((uint8_t *)eth_hdr + sizeof(struct rte_ether_hdr));
-	struct rte_udp_hdr * udp_hdr = (struct rte_udp_hdr *)((uint8_t *)ipv4_hdr + sizeof(struct rte_ipv4_hdr));
-	struct roce_v2_header * roce_hdr = (struct roce_v2_header *)((uint8_t*)udp_hdr + sizeof(struct rte_udp_hdr));
-	struct clover_hdr * clover_header = (struct clover_hdr *)((uint8_t *)roce_hdr + sizeof(roce_v2_header));
-
-	uint32_t crc_check;
-	uint8_t buf[1500];
-
-	printf("BEFORE\n\n");
-	print_packet(pkt);
-
-	uint8_t ttl = ipv4_hdr->time_to_live;
-	ipv4_hdr->time_to_live=0xFF;
-
-	uint16_t ipv4_csum = ipv4_hdr->hdr_checksum;
-	ipv4_hdr->hdr_checksum=0xFFFF;
-
-	uint8_t ipv4_tos = ipv4_hdr->type_of_service;
-	ipv4_hdr->type_of_service=0xFF;
-
-	uint16_t udp_csum = udp_hdr->dgram_cksum;
-	udp_hdr->dgram_cksum=0xFFFF;
-
-	uint8_t roce_res = roce_hdr->reserverd;
-	roce_hdr->reserverd=0x3F;
-
-	uint8_t fecn = roce_hdr->fecn;
-	roce_hdr->fecn=1;
-
-	uint8_t bcen = roce_hdr->bcen;
-	roce_hdr->bcen=1;
-
-
-	//uint32_t len = ntohs(ipv4_hdr->total_length) - 4;
-	print_packet(pkt);
-	void * current = (void *)(ipv4_hdr) + ntohs(ipv4_hdr->total_length) - 4;
-	uint8_t current_val[4];
-	memcpy(current_val,current,4);
-
-	printf("----------------------\nRaw Checksum\n----------------------\n");
-	print_bytes(&current_val,4);
-
-
-	// try the best guess first
-	//uint32_t blen = ntohs(ipv4_hdr->total_length - 4);
-	//printf("bLen %d, ipv4_ttl: %d ipv4_csum: %d\n",blen,ipv4_hdr->time_to_live,ipv4_hdr->hdr_checksum);
-	//memcpy(buf,ipv4_hdr,blen);
-	//big_endian_reverse(buf,blen);
-
-	uint8_t test_buf[] = {0xff, 0xff, 0xff, 0xff};
-
-	int flip_crc = 0;
-
-	//big_endian_reverse(current_val,4);
-	//return crc_check;
-	for (int i=0;i<ntohs(ipv4_hdr->total_length) + sizeof(struct rte_ether_hdr);i++)  {
-		for (int j=i;j<ntohs(ipv4_hdr->total_length) + sizeof(struct rte_ether_hdr);j++)  {
-
-			uint32_t len = j-i;
-			uint8_t * start = (uint8_t*)(eth_hdr) + i;
-			bzero(buf,1500);
-			memcpy(buf,start,len);
-			//big_endian_reverse(buf,len);
-
-			//zlib todo figure out how to link
-			//uLong crc = crc32(0xFFFFFFFF, Z_NULL, 0); 
-
-			/* This seed is the result of computing a CRC with a seed of
-	 		 * 0xfffffff and 8 bytes of 0xff representing a masked LRH.
-	 		 */
-			//uLong crc = 0xdebb20e3;
-			//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, buf, len) & 0xFFFFFFFF;
-			//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, test_buf, 4) & 0xFFFFFFFF;
-
-			//This sets upt the seed for the dummy LRH
-			//uLong crc = ~crc32(0xFFFFFFFF, test_buf, 4) & 0xFFFFFFFF;
-			uLong crc = crc32(0xFFFFFFFF, test_buf, 4);
-			
-			//Now lets test with the dummy bytes
-			crc = ~crc32(crc,buf,len) & 0xFFFFFFFF;
-
-			//crc = ~crc & 0xFFFFFFFF;
-			crc_check = crc;
-			//big_endian_reverse(&crc_check,4);
-
-			//If we don't flip the crc it reads e320bbde
-			//If we do flip it, it turns to 0xdebb20e3
-			//we might only want to flip at the end
-			if (flip_crc == 0) {
-				crc_check = ntohl(crc_check);
-			}
-
-
-			//We might not want to
-
-			print_bytes(&crc_check,4);
-			printf("\n");
-			//uLong crc = ~crc32(0xFFFFFFFFFFFFFFFF, buf, len) & 0xFFFFFFFF;
-
-
-
-
-			//printf("%u\n",crc);
-			check_sums_wrap("zlib_crc",current_val, &crc_check);
-
-			//print_bytes(start,4);
-			//print_binary_bytes(start,4);
-			//printf("\n");
-
-			//print_bytes(buf,4);
-			//print_binary_bytes(buf,4);
-			//printf("\n");
-
-			//printf("len %d i %d j %d\n",len,i,j);
-
-			//crc_check = crc32_le(0xFFFFFFFF,buf,len);
-			//check_sums_wrap("crc le",current, &crc_check);
-
-			/*
-			crc_check = xcrc32 (buf, len, 0xFFFFFFFF);
-			check_sums_wrap("xcrc",current, &crc_check);
-
-			crc_check = rte_hash_crc(buf,len, 0xFFFFFFFF);
-			check_sums_wrap("rte_hash",current, &crc_check);
-
-			crc_check = dr_crc32_slice8_calc(buf,len);
-			check_sums_wrap("dr_crc",current, &crc_check);
-
-			uLong crc = crc32(0L, Z_NULL, 0); 
-			crc = crc32(crc, buf, len);
-			crc_check = crc;
-			check_sums_wrap("zlib_crc",current, &crc_check);
-*/
-			/*
-			bzero(buf,1500);
-			memcpy(buf,start,len);
-
-			crc_check = xcrc32 (buf, len, 0xFFFFFFFF);
-			check_sums_wrap("xcrc",current, &crc_check);
-
-			crc_check = rte_hash_crc(buf,len, 0xFFFFFFFF);
-			check_sums_wrap("rte_hash",current, &crc_check);
-
-			crc_check = dr_crc32_slice8_calc(buf,len);
-			check_sums_wrap("dr_crc",current, &crc_check);
-			*/
-
-			//printf("Best Guess hash (csum)");
-			//print_bytes(&crc_check,4);
-			//printf("\n");
-
-			//printf("Best Guess hash ");
-			//print_bytes(&crc_check,4);
-			//printf("\n");
-
-
-			//printf("Current Checksum ");
-			//print_bytes(&current_val,4);
-			//printf("\n");
-			//printf("len: %d\n",ntohs(ipv4_hdr->total_length));
-			//printf("\n");
-
-		}
-	}
-	print_packet(pkt);
-
-	ipv4_hdr->time_to_live=ttl;
-	ipv4_hdr->hdr_checksum = ipv4_csum;
-	ipv4_hdr->type_of_service = ipv4_tos;
-	udp_hdr->dgram_cksum = udp_csum;
-	roce_hdr->reserverd=roce_res;
-	roce_hdr->fecn = fecn;
-	roce_hdr->bcen = bcen;
-
-	return crc_check;
-
-}
-
-
-
 char ib_print[RDMA_COUNTER_SIZE][RDMA_STRING_NAME_LEN];
 
 static int rdma_counter = 0;
@@ -558,7 +374,6 @@ static uint64_t key_versions[KEYSPACE][KEY_VERSION_RING_SIZE];
 static uint32_t key_count[KEYSPACE];
 
 
-static int print_next = 0;
 static uint64_t last_cns = 0;
 static uint64_t first_write[KEYSPACE];
 static uint64_t second_write[TOTAL_ENTRY][KEYSPACE];
@@ -632,7 +447,6 @@ void true_classify(struct rte_mbuf * pkt) {
 		//count_read_resp_addr(rr);
 	}
 
-	//uint16_t r_keyspace = ntohs(roce_hdr->partition_key);
 	uint32_t r_qp= roce_hdr->dest_qp;
 
 	//Write Request
@@ -649,7 +463,6 @@ void true_classify(struct rte_mbuf * pkt) {
 		//printf("ID: %d KEY: %"PRIu64"\n",id,*key);
 
 
-		//TODO TODO this is also likely wrong in the multithereaded case.
 		if(first_write[*key] != 0 && first_cns[*key] != 0) {
 			//printf("predict from not addr for key %"PRIu64", for remote key space %d\n",*key,roce_hdr->partition_key);
 			predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10);
@@ -658,10 +471,7 @@ void true_classify(struct rte_mbuf * pkt) {
 			outstanding_write_vaddrs[id][*key] = wr->rdma_extended_header.vaddr;
 			//printf("full write is equal to %"PRIu64" for key %"PRIu64" id: %d\n",first_write[*key],*key,id);
 
-			//print_address(&predict_address);
-			//print_binary_address(&predict_address);
 		} else {
-			//printf("setting first write!!\n");
 			//okay so this happens twice becasuse the order is 
 			//Write 1;
 			//Write 2;
@@ -685,14 +495,11 @@ void true_classify(struct rte_mbuf * pkt) {
 				outstanding_write_vaddrs[id][*key] = wr->rdma_extended_header.vaddr;
 				printf("crash write full write is equal to %"PRIu64" for key %"PRIu64" id: %d\n",first_write[*key],*key,id);
 			}
-
-			//I think that the first write can easily get over written here
-
 		}
 
 		latest_key[id] = *key;
 
-
+		//Count the big writes, this is mostly for testing
 		if (size >= 1084) {
 			//printf("key %02X %02X %02X %02X \n",key[0], key[1], key[2], key[3]);
 			//Update current write kv location
@@ -704,9 +511,6 @@ void true_classify(struct rte_mbuf * pkt) {
 		} else {
 			printf("size too small to print extra data\n");
 		}
-		//printf("--------------//write-------------\n");
-
-
 
 		//Periodically print the sate of a particular key.
 		if (*key == 1 && key_count[*key]==KEY_VERSION_RING_SIZE) {
@@ -714,17 +518,11 @@ void true_classify(struct rte_mbuf * pkt) {
 				printf("key: %d address:%"PRIu64" index: %d\n",*key,key_versions[*key][i], i+(key_count[*key]-KEY_VERSION_RING_SIZE));
 			}
 		}
-
-		//TODO this is where a check and set operation for a given key should be generated
 	}
 
 	if (size == 72 && opcode == RC_CNS) {
-	//if (size == 72 && opcode == RC_CNS && print_next) {
-		//print_packet(pkt);
-		//print_next = 0;
-		//printf("(cns  ) Accessing remote keyspace %d\n",r_qp);
-		struct cs_request * cs = (struct cs_request*) clover_header;
 
+		struct cs_request * cs = (struct cs_request*) clover_header;
 		uint64_t swap = MITSUME_GET_PTR_LH(be64toh(cs->atomic_req.swap_or_add));
 		swap = htobe64(swap);
 
@@ -734,7 +532,6 @@ void true_classify(struct rte_mbuf * pkt) {
 
 		//printf("Latest id KEY: id: %d, key %"PRIu64"\n",id, latest_key[id]);
 		//print_address(&swap);
-		//print_binary_address(&swap);
 
 		//This is the first instance of the cns for this key, it is a misunderstood case
 		//For now return after setting the first instance of the key to the swap value
@@ -755,19 +552,16 @@ void true_classify(struct rte_mbuf * pkt) {
 					printf("now working with predict %d\n",predict);
 				}
 			}
-
+			//Return and forward the packet if this is the first cns
 			return;
 		}
 
-
-		//Here we are going to guess where the packet is going
+		//Based on the key predict where the next CNS address should go. This requires the first CNS to be set
 		uint32_t key = latest_key[id];
 		uint64_t predict = outstanding_write_predicts[id][key];
 		//printf("Raw predict %d\n",predict);
 		predict = predict + be64toh(first_cns[key]);
 		predict = htobe64( 0x00000000FFFFFF & predict);
-		//printf("predict: %"PRIu64" ID %d KEY %d\n",predict,id,key);
-
 
 		//Here we have had a first cns (assuming bunk, and we want to point to the latest in the list)
 		if (next_vaddr[latest_key[id]] == cs->atomic_req.vaddr) {
@@ -782,20 +576,16 @@ void true_classify(struct rte_mbuf * pkt) {
 			printf("next addr[key = %d] ID: %d vaddr %"PRIu64"\n",latest_key[id],id,next_vaddr[latest_key[id]]);
 			printf("cs addr %"PRIu64"\n",cs->atomic_req.vaddr);
 			*/
-			//perhaps we should check first if there is something next
+			//Modify the next cns to poinnt to the last scene write
 			cs->atomic_req.vaddr = next_vaddr[latest_key[id]]; //We can add this once we can predict with confidence
+			//modify the ICRC checksum
 			uint32_t crc_check =csum_pkt_fast(pkt); //This need to be added before we can validate packets
 			void * current_checksum = (void *)(ipv4_hdr) + ntohs(ipv4_hdr->total_length) - 4;
 			memcpy(current_checksum,&crc_check,4);
-
-			//print_packet(pkt);
-
-			//exit(0);
 		}
 
-		//print_packet(pkt);
-
-
+		//given that a cns has been determined move the next address for this 
+		//key, to the outstanding write of the cns that was just made
 		if (predict == swap) {
 			next_vaddr[latest_key[id]] = outstanding_write_vaddrs[id][key];
 			//erase the old entries
@@ -808,17 +598,6 @@ void true_classify(struct rte_mbuf * pkt) {
 		}
 	}
 
-
-	if (packet_counter % 10000 == 0) {
-		//print_read_req_addr();
-		//print_read_resp_addr();
-
-		for (int i=0;i<KEYSPACE;i++) {
-			if (key_address[i] != 0) {
-				///printf("key %i: address: %"PRIu64": writes: %d\n",i,key_address[i],key_count[i]);
-			}
-		}
-	}
 	return;
 }
 
@@ -1370,7 +1149,7 @@ lcore_main(void)
 
 
 
-				//true_classify(rx_pkts[i]);
+				true_classify(rx_pkts[i]);
 
 				//this must be recomputed if the packet is changed
 				uint16_t ipcsum, old_ipcsum;
