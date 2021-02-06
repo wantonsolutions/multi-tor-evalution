@@ -650,7 +650,6 @@ void true_classify(struct rte_mbuf * pkt) {
 		if(first_write[*key] != 0 && first_cns[*key] != 0) {
 			//printf("predict from not addr for key %"PRIu64", for remote key space %d\n",*key,roce_hdr->partition_key);
 			predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10);
-
 			//printf("Predict Address %"PRIu64"\n",predict_address[*key]);
 			outstanding_write_predicts[id][*key] = predict_address[*key];
 			outstanding_write_vaddrs[id][*key] = wr->rdma_extended_header.vaddr;
@@ -665,12 +664,25 @@ void true_classify(struct rte_mbuf * pkt) {
 			//Write 2;
 			//CNS 1 (write 1 - > write 2)
 			if (first_write[*key] == 0) {
+				//These are dummy values for testing because I think I got the algorithm wrong
+				first_write[*key] = 1;
+				//next_vaddr[*key] = 1;
 				printf("first write is being set, this is indeed the first write for key %"PRIu64" id: %d\n",*key,id);
+			} else if (first_write[*key] == 1) {
+				first_write[*key] = wr->rdma_extended_header.vaddr;
+				next_vaddr[*key] = wr->rdma_extended_header.vaddr;
+				printf("second write is equal to %"PRIu64" for key %"PRIu64" --- This is so likely an errror :( -- doing the same algorithm anyways id: %d\n",first_write[*key],*key,id);
+				predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10);
+				outstanding_write_predicts[id][*key] = predict_address[*key];
+				outstanding_write_vaddrs[id][*key] = wr->rdma_extended_header.vaddr;
 			} else {
-				printf("first write is equal to %"PRIu64" for key %"PRIu64" --- This is so likely an errror :( -- doing the same algorithm anyways id: %d\n",first_write[*key],*key,id);
+				printf("THIS IS WHERE THE BUGS HAPPEN ABOUT TO CRASH!!!! ID: %d KEY: %d\n",id,*key);
+				printf("Trying to save the ship by hoping the prior write makes it through first\n");
+				predict_address[*key] = ((be64toh(wr->rdma_extended_header.vaddr) - be64toh(first_write[*key])) >> 10);
+				outstanding_write_predicts[id][*key] = predict_address[*key];
+				outstanding_write_vaddrs[id][*key] = wr->rdma_extended_header.vaddr;
+				printf("crash write full write is equal to %"PRIu64" for key %"PRIu64" id: %d\n",first_write[*key],*key,id);
 			}
-			first_write[*key] = wr->rdma_extended_header.vaddr;
-			next_vaddr[*key] = wr->rdma_extended_header.vaddr;
 
 			//I think that the first write can easily get over written here
 
@@ -731,6 +743,16 @@ void true_classify(struct rte_mbuf * pkt) {
 			return;
 		}
 
+
+		//Here we are going to guess where the packet is going
+		uint32_t key = latest_key[id];
+		uint64_t predict = outstanding_write_predicts[id][key];
+		printf("Raw predict %d\n",predict);
+		predict = predict + be64toh(first_cns[key]);
+		predict = htobe64( 0x00000000FFFFFF & predict);
+		printf("predict: %"PRIu64" ID %d KEY %d\n",predict,id,key);
+
+
 		//Here we have had a first cns (assuming bunk, and we want to point to the latest in the list)
 		if (next_vaddr[latest_key[id]] == cs->atomic_req.vaddr) {
 			printf("this is good, it seems we made the correct prediction, this is the common case Key %d ID %d\n",latest_key[id],id);
@@ -739,14 +761,15 @@ void true_classify(struct rte_mbuf * pkt) {
 			printf("\n\n\n\n\n SWAPPPING OUT THE VADDR!!!!!!!"
 			"key %"PRIu64" id %d" 
 			"\n\n\n\n\n",latest_key[id],id);
-			//print_packet(pkt);
+			printf("Now we need to know how different these addresses are\n");
+			printf("next addr[key = %d] ID: %d vaddr %"PRIu64"\n",latest_key[id],id,next_vaddr[latest_key[id]]);
+			printf("cs addr %"PRIu64"\n",cs->atomic_req.vaddr);
 
-			//uint32_t crc_check =csum_pkt(ipv4_hdr);
+			//perhaps we should check first if there is something next
 
-			//uint32_t crc_check =csum_pkt_fast(pkt); //Test that the checksum for the original can be calculated
+
 			cs->atomic_req.vaddr = next_vaddr[latest_key[id]]; //We can add this once we can predict with confidence
 			uint32_t crc_check =csum_pkt_fast(pkt); //This need to be added before we can validate packets
-
 			void * current_checksum = (void *)(ipv4_hdr) + ntohs(ipv4_hdr->total_length) - 4;
 			memcpy(current_checksum,&crc_check,4);
 
@@ -757,58 +780,17 @@ void true_classify(struct rte_mbuf * pkt) {
 
 		//print_packet(pkt);
 
-		//Here we want to determine what the new tail of the list is based on the swap_or_add address
-		int found = 0;
-		uint32_t key = latest_key[id];
-		for (int i=0;i<qp_id_counter;i++) {
 
-			uint64_t predict = outstanding_write_predicts[i][key];
-			predict = predict + be64toh(first_cns[key]);
-			predict = htobe64( 0x00000000FFFFFF & predict);
-
-			printf("predict: %"PRIu64"\n",predict);
-			if (predict == swap) {
-				next_vaddr[latest_key[id]] = outstanding_write_vaddrs[i][key];
-				//erase the old entries
-				outstanding_write_predicts[i][latest_key[id]] = 0;
-				outstanding_write_vaddrs[i][latest_key[id]] = 0;
-				found = 1;
-				printf("the next tail of the list for key %"PRIu64" has been found to be id: %d vaddr: %"PRIu64"\n",latest_key[id],id,next_vaddr[latest_key[id]]);
-				break;
-			}
-		}
-
-		if (!found) {
+		if (predict == swap) {
+			next_vaddr[latest_key[id]] = outstanding_write_vaddrs[id][key];
+			//erase the old entries
+			outstanding_write_predicts[id][latest_key[id]] = 0;
+			outstanding_write_vaddrs[id][latest_key[id]] = 0;
+			printf("the next tail of the list for key %"PRIu64" has been found to be id: %d vaddr: %"PRIu64"\n",latest_key[id],id,next_vaddr[latest_key[id]]);
+		} else {
 			printf("unable to find the next oustanding write, how can this be!!??! SWAP: %"PRIu64" latest_key[id = %d]=%"PRIu64", first cns[key = %d]=%"PRIu64"\n",swap,id,latest_key[id],latest_key[id],first_cns[latest_key[id]]);
 			exit(0);
 		}
-		/*
-		if (swap == predict_address[latest_key[id]]) {
-			//printf("correct prediction for key %"PRIu64"\n",swap);
-			//Now swap out the predicted address
-			uint64_t new_swap = 0;
-			//copy new swap from sent address
-			new_swap = be64toh(cs->atomic_req.swap_or_add);
-			//clear the address bits
-			new_swap = (~MITSUME_PTR_MASK_LH) & new_swap;
-			//replace address bits with predicted bits
-			new_swap += (be64toh(predict_address[latest_key[id]]) << 28);
-			new_swap = htobe64(new_swap);
-
-			//TODO when we have multiple hosts and we will want to actually set the address
-			if (new_swap != cs->atomic_req.swap_or_add) {
-				printf("unable to correctly swap out addresses (original, new)");
-				print_address(&(cs->atomic_req.swap_or_add));
-				print_address(&new_swap);
-			}
-			cs->atomic_req.swap_or_add = new_swap;
-
-		} else {
-			printf("\n\n\n\nFAILURE FAILURE Address prediction incorrect for key %"PRIu64" actual address value %"PRIu64" =/= %"PRIu64"\n\n\n",latest_key[id], predict_address[latest_key[id]],swap);
-			//TODO deal with this error when it happens
-			exit(0);
-		}
-		*/
 	}
 
 
