@@ -32,9 +32,17 @@ uint32_t csum_pkt(struct rte_mbuf* pkt);
 
 
 
+int init_hash(void);
+int set_id(uint32_t qp, uint32_t id);
+uint32_t get_id(uint32_t qp);
 
 
 //nessisary ib verbs
+void print_ack_extended_header(struct AETH *aeth);
+void print_rdma_extended_header(struct RTEH *rteh);
+void print_binary_address(uint64_t *address);
+void print_address(uint64_t *address);
+void print_binary_bytes(const uint8_t * buf, uint32_t len);
 
 
 void count_values(uint64_t *index, uint32_t *count, uint32_t size, uint64_t value);
@@ -70,6 +78,8 @@ struct rte_udp_hdr * udp_hdr_process(struct rte_ipv4_hdr *ipv4_hdr);
 struct roce_v2_header * roce_hdr_process(struct rte_udp_hdr * udp_hdr);
 struct clover_hdr * mitsume_msg_process(struct roce_v2_header * roce_hdr);
 //struct mitsume_msg * mitsume_msg_process(struct roce_v2_header * roce_hdr);
+
+void debug_icrc(struct rte_mempool *mbuf_pool);
 
 
 
